@@ -14,7 +14,7 @@ def detect_trend(prices):
 def find_best_starting_point(prices, window=50):
     """
     Find the best starting point for Fibonacci retracement analysis.
-    Uses a rolling window to find significant local minima or maxima.
+    Ensures A is the lowest point for downtrend or highest point for uptrend.
 
     Args:
     prices (list): Price series
@@ -40,19 +40,8 @@ def find_best_starting_point(prices, window=50):
         if local_mins:
             return min(local_mins, key=lambda x: x[1])[0]
     else:
-        # For downtrend, look for a local maximum
-        local_maxs = []
-        for i in range(window, len(prices) - window):
-            local_window = prices_array[i - window:i + window]
-            if prices_array[i] == np.max(local_window):
-                local_maxs.append((i, prices_array[i]))
-
-        # Select the local maximum with the highest price
-        if local_maxs:
-            return max(local_maxs, key=lambda x: x[1])[0]
-
-    # Fallback to a point near the start if no suitable point found
-    return len(prices) // 4
+        # For downtrend, look for the absolute lowest point
+        return np.argmin(prices_array)
 
 
 def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2):
@@ -60,9 +49,8 @@ def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2):
     Find Fibonacci retracement points in price data dynamically.
     Improved version with better starting point selection.
     """
-    # Find a better starting point
+    # Find the best starting point
     A = find_best_starting_point(prices)
-
     direction = detect_trend(prices[A:])
 
     # Adjust prices to start from the new A point
@@ -105,46 +93,146 @@ def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2):
         D = min(range(C + 1, len(prices_subset)), key=lambda i: prices_subset[i])  # Find new low
 
     # Adjust indices to original price series
-    return {
-        "A": (A + 0, prices[A + 0]),
+    result = {
+        "A": (A, prices[A]),
         "B": (A + B, prices[A + B]),
         "C": (A + C, prices[A + C]),
         "D": (A + D, prices[A + D]),
         "direction": direction
     }
+    return result
 
 
-def plot_fib_retracement(prices, result):
-    if not result:
-        print("No valid retracement found.")
-        return
+def draw_fibonacci_levels(plt, prices, direction):
+    """
+    Draw Fibonacci retracement levels on a diagnostic plot
+    based on min and max values
+    """
+    min_idx = np.argmin(prices)
+    max_idx = np.argmax(prices)
 
-    direction = result.get("direction", "up")
-    plt.figure(figsize=(14, 8))
-    plt.plot(prices, marker='o', linestyle='-', color='black', alpha=0.7, label='Price Series')
-    move_type = "Upward" if direction == "up" else "Downward"
-    plt.title(f'Fibonacci Retracement Analysis - {move_type} Move', fontsize=16)
+    # Determine A and B for Fibonacci levels based on trend
+    if direction == "up":
+        A_value = prices[min_idx]
+        B_value = prices[max_idx]
+    else:
+        A_value = prices[max_idx]
+        B_value = prices[min_idx]
 
-    # Mark key points
-    points = {'A': ('black', result['A']), 'B': ('red', result['B']), 'C': ('green', result['C']),
-              'D': ('blue', result['D'])}
-    for label, (color, (idx, price)) in points.items():
-        plt.scatter(idx, price, color=color, s=100, zorder=3)
-        plt.text(idx, price, label, fontsize=14, fontweight='bold', ha='right', va='bottom', color=color)
+    # Calculate the main move
+    main_move = B_value - A_value
 
-    # Plot Fibonacci retracement levels
-    A, B, C = result['A'][1], result['B'][1], result['C'][1]
-    main_move = B - A if direction == "up" else A - B
-    fib_levels = [0, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
+    # Draw retracement levels
+    fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
+    level_colors = {
+        0: '#FF0000',  # Red
+        0.236: '#FF7F00',  # Orange
+        0.382: '#FFFF00',  # Yellow
+        0.5: '#00FF00',  # Green
+        0.618: '#0000FF',  # Blue
+        0.764: '#4B0082',  # Indigo
+        1.0: '#8F00FF',  # Violet
+        -0.236: '#FFC0CB',  # Pink
+        -0.618: '#800080'  # Purple
+    }
+
     for level in fib_levels:
-        fib_price = B - (main_move * level) if direction == "up" else B + (main_move * level)
-        plt.axhline(y=fib_price, color='gray', linestyle='--', alpha=0.6, linewidth=1)
-        plt.text(0, fib_price, f'{level * 100:.1f}%', fontsize=8, verticalalignment='center', color='gray')
+        fib_price = B_value - (main_move * level) if direction == "up" else B_value + (main_move * level)
+        plt.axhline(
+            y=fib_price,
+            color=level_colors.get(level, 'gray'),
+            linestyle='--',
+            alpha=0.6,
+            linewidth=1.5,
+            label=f'Fib {level * 100:.1f}%'
+        )
+        plt.text(
+            0,
+            fib_price,
+            f'{level * 100:.1f}%',
+            fontsize=10,
+            verticalalignment='center',
+            color=level_colors.get(level, 'gray')
+        )
+
+    return plt
+
+
+def plot_diagnostic_graph(prices, result=None):
+    """
+    Create a diagnostic plot of the price series.
+    If a retracement result is provided, mark the key points.
+    Always draw Fibonacci levels based on min and max prices.
+    """
+    plt.figure(figsize=(16, 10))
+    plt.plot(prices, marker='o', linestyle='-', color='black', alpha=0.7, label='Price Series')
+
+    # Title and basic info
+    direction = result['direction'] if result else detect_trend(prices)
+    move_type = "Upward" if direction == "up" else "Downward"
+    plt.title(f'Price Series Diagnostic Plot - {move_type} Move', fontsize=16)
+
+    # If result exists, mark key points
+    if result:
+        points = {'A': ('black', result['A']), 'B': ('red', result['B']),
+                  'C': ('green', result['C']), 'D': ('blue', result['D'])}
+
+        for label, (color, point) in points.items():
+            plt.scatter(point[0], point[1], color=color, s=100, zorder=3)
+            plt.text(point[0], point[1], label, fontsize=14, fontweight='bold',
+                     ha='right', va='bottom', color=color)
+
+        # Draw Fibonacci retracement levels based on A and B
+        A, B = result['A'][1], result['B'][1]
+        main_move = B - A if direction == "up" else A - B
+        fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
+        level_colors = {
+            0: '#FF0000',  # Red
+            0.236: '#FF7F00',  # Orange
+            0.382: '#FFFF00',  # Yellow
+            0.5: '#00FF00',  # Green
+            0.618: '#0000FF',  # Blue
+            0.764: '#4B0082',  # Indigo
+            1.0: '#8F00FF',  # Violet
+            -0.236: '#FFC0CB',  # Pink
+            -0.618: '#800080'  # Purple
+        }
+
+        for level in fib_levels:
+            fib_price = B - (main_move * level) if direction == "up" else B + (main_move * level)
+            plt.axhline(
+                y=fib_price,
+                color=level_colors.get(level, 'gray'),
+                linestyle='--',
+                alpha=0.6,
+                linewidth=1.5,
+                label=f'Fib {level * 100:.1f}%'
+            )
+            plt.text(
+                0,
+                fib_price,
+                f'{level * 100:.1f}%',
+                fontsize=10,
+                verticalalignment='center',
+                color=level_colors.get(level, 'gray')
+            )
+    else:
+        # Draw Fibonacci levels based on min and max when no pattern is found
+        plt = draw_fibonacci_levels(plt, prices, direction)
+
+    # Statistical annotations
+    plt.axhline(y=np.mean(prices), color='purple', linestyle='-', linewidth=2, label='Mean Price')
+
+    # Min and Max points
+    min_idx = np.argmin(prices)
+    max_idx = np.argmax(prices)
+    plt.scatter(min_idx, prices[min_idx], color='darkred', label='Min Price', s=100, zorder=4)
+    plt.scatter(max_idx, prices[max_idx], color='darkgreen', label='Max Price', s=100, zorder=4)
 
     plt.xlabel('Index', fontsize=12)
     plt.ylabel('Price', fontsize=12)
     plt.grid(True, alpha=0.3)
-    plt.legend()
+    plt.legend(loc='upper right')
     plt.tight_layout()
 
 
@@ -192,20 +280,31 @@ def main():
     # Run Analysis on BTC Data
     result = find_retracement_extension(prices)
 
+    # Always plot the diagnostic graph
+    plot_diagnostic_graph(prices, result)
+
     if result:
-        plot_fib_retracement(prices, result)
         analysis = analyze_move(result)
 
         print(f"Detected trend: {result['direction']}")
         print(f"Identified points:")
-        for point, (idx, price) in result.items():
+        for point, point_info in result.items():
             if point != 'direction':
-                print(f"{point}: Index {idx}, Price {price}")
+                print(f"{point}: Index {point_info[0]}, Price {point_info[1]}")
         print(f"Analysis: {analysis}")
 
-        plt.show()
+        # Print key Fibonacci ratios
+        A, B = result['A'][1], result['B'][1]
+        main_move = B - A if result['direction'] == "up" else A - B
+        print("\nKey Fibonacci levels:")
+        for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]:
+            fib_price = B - (main_move * level) if result['direction'] == "up" else B + (main_move * level)
+            print(f"{level * 100:.1f}%: {fib_price:.2f}")
     else:
         print("Could not find a valid Fibonacci retracement pattern.")
+        print("A diagnostic graph has been generated with Fibonacci levels based on min/max prices.")
+
+    plt.show()
 
 
 if __name__ == "__main__":
