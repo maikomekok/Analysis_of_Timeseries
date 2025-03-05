@@ -1,80 +1,71 @@
 import matplotlib.pyplot as plt
-import numpy as np
+import pandas as pd
+
+# Load BTC data
+df = pd.read_csv("BTCUSDT-hourly-historical-price.csv")
+Prices = df["close"].dropna().iloc[200:800]
+prices = Prices.tolist()
 
 
-def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2, direction="up"):
+
+def detect_trend(prices):
+    """Automatically detects if the trend is upward or downward."""
+    if prices[-1] > prices[0]:
+        return "up"
+    else:
+        return "down"
+
+def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2):
     """
-    Find Fibonacci retracement points in price data.
-
-    Parameters:
-    - prices: list of price values
-    - threshold: retracement threshold (default 0.3 or 30%)
-    - nested_threshold: threshold for nested patterns (default 0.2 or 20%)
-    - direction: "up" for upward move or "down" for downward move
-
-    Returns:
-    - Dictionary with identified points
+    Find Fibonacci retracement points in price data dynamically.
+    Now automatically detects trend direction.
     """
+    direction = detect_trend(prices)
     A = 0
     B, C, D = None, None, None
 
+    # Find B (Swing High/Low)
     if direction == "up":
-        for i in range(1, len(prices) - 1):
-            if prices[i] > prices[i - 1] and prices[i] > prices[i + 1]:
-                B = i
-                break
+        B = max(range(1, len(prices) - 1), key=lambda i: prices[i])  # Find highest point
     else:
-        for i in range(1, len(prices) - 1):
-            if prices[i] < prices[i - 1] and prices[i] < prices[i + 1]:
-                B = i
-                break
+        B = min(range(1, len(prices) - 1), key=lambda i: prices[i])  # Find lowest point
 
     if B is None:
         return None
 
+    # Find C based on retracement threshold
     if direction == "up":
         move = prices[B] - prices[A]
         retracement_threshold = prices[B] - (move * threshold)
         for j in range(B + 1, len(prices) - 1):
-            if prices[j] <= retracement_threshold and prices[j] < prices[j - 1] and prices[j] < prices[j + 1]:
+            if prices[j] <= retracement_threshold:
                 C = j
                 break
     else:
         move = prices[A] - prices[B]
         retracement_threshold = prices[B] + (move * threshold)
         for j in range(B + 1, len(prices) - 1):
-            if prices[j] >= retracement_threshold and prices[j] > prices[j - 1] and prices[j] > prices[j + 1]:
+            if prices[j] >= retracement_threshold:
                 C = j
                 break
 
     if C is None:
         return None
 
+    # Find D (Final Move Completion)
     if direction == "up":
-        for k in range(C + 1, len(prices) - 1):
-            if prices[k] > prices[k - 1] and prices[k] > prices[k + 1]:
-                D = k
-                break
+        D = max(range(C + 1, len(prices)), key=lambda i: prices[i])  # Find new high
     else:
-        for k in range(C + 1, len(prices) - 1):
-            if prices[k] < prices[k - 1] and prices[k] < prices[k + 1]:
-                D = k
-                break
+        D = min(range(C + 1, len(prices)), key=lambda i: prices[i])  # Find new low
 
-    result = {
-        "A": (A, prices[A]),
-        "B": (B, prices[B]),
-        "C": (C, prices[C]),
-        "threshold": threshold,
-        "nested_threshold": nested_threshold,
-        "direction": direction
-    }
+    # Ensure -23.6% level is crossed
+    move_extension = (prices[D] - prices[C]) / (prices[B] - prices[A])
+    if move_extension < -0.236:
+        print(f"Move complete: crossed -23.6% level at index {D}, price: {prices[D]}")
+    else:
+        print("Move not completed yet.")
 
-    if D is not None:
-        result["D"] = (D, prices[D])
-
-    return result
-
+    return {"A": (A, prices[A]), "B": (B, prices[B]), "C": (C, prices[C]), "D": (D, prices[D]), "direction": direction}
 
 def plot_fib_retracement(prices, result):
     if not result:
@@ -87,31 +78,20 @@ def plot_fib_retracement(prices, result):
     move_type = "Upward" if direction == "up" else "Downward"
     plt.title(f'Fibonacci Retracement Analysis - {move_type} Move', fontsize=16)
 
-    points = {'A': ('black', result['A']), 'B': ('red', result['B']), 'C': ('green', result['C'])}
-    if 'D' in result:
-        points['D'] = ('blue', result['D'])
-
+    # Mark key points
+    points = {'A': ('black', result['A']), 'B': ('red', result['B']), 'C': ('green', result['C']), 'D': ('blue', result['D'])}
     for label, (color, (idx, price)) in points.items():
         plt.scatter(idx, price, color=color, s=100, zorder=3)
-        va_pos = 'bottom' if label in ['A', 'C'] else 'top'
-        plt.text(idx, price, label, fontsize=14, fontweight='bold', ha='right', va=va_pos, color=color)
+        plt.text(idx, price, label, fontsize=14, fontweight='bold', ha='right', va='bottom', color=color)
 
-    # Plot Fibonacci retracement lines
-    if direction == "up":
-        main_move = result['B'][1] - result['A'][1]
-        # Use custom levels: 76.4% instead of 78.6%, and add -23.6% and -61.8%
-        fib_levels = [0, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
-        for level in fib_levels:
-            fib_price = result['B'][1] - (main_move * level)
-            plt.axhline(y=fib_price, color='gray', linestyle='--', alpha=0.6, linewidth=1)
-            plt.text(0, fib_price, f'{level * 100:.1f}%', fontsize=8, verticalalignment='center', color='gray')
-    else:
-        main_move = result['A'][1] - result['B'][1]
-        fib_levels = [0, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
-        for level in fib_levels:
-            fib_price = result['B'][1] + (main_move * level)
-            plt.axhline(y=fib_price, color='gray', linestyle='--', alpha=0.6, linewidth=1)
-            plt.text(0, fib_price, f'{level * 100:.1f}%', fontsize=8, verticalalignment='center', color='gray')
+    # Plot Fibonacci retracement levels
+    A, B, C = result['A'][1], result['B'][1], result['C'][1]
+    main_move = B - A if direction == "up" else A - B
+    fib_levels = [0, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
+    for level in fib_levels:
+        fib_price = B - (main_move * level) if direction == "up" else B + (main_move * level)
+        plt.axhline(y=fib_price, color='gray', linestyle='--', alpha=0.6, linewidth=1)
+        plt.text(0, fib_price, f'{level * 100:.1f}%', fontsize=8, verticalalignment='center', color='gray')
 
     plt.xlabel('Index', fontsize=12)
     plt.ylabel('Price', fontsize=12)
@@ -119,104 +99,46 @@ def plot_fib_retracement(prices, result):
     plt.legend()
     plt.tight_layout()
 
-
-def analyze_move(result, prices):
-    """
-    Analyze the move based on retracement and extension ratios.
-    For an upward move, we compute:
-      - retracement_ratio = (B - C) / (B - A)
-      - extension_ratio = (D - C) / (B - A) if D exists
-
-    Adjust thresholds to classify the move:
-      - If retracement_ratio < 0.382: Progressive move (shallow retracement)
-      - If retracement_ratio >= 0.618: Failed move (deep retracement)
-      - Otherwise: Successful move
-
-    Optionally, strong extension (extension_ratio > 1.0) adds further confirmation.
-    """
+def analyze_move(result):
+    """Analyze the retracement and extension ratios."""
     if result is None:
         return "No valid pattern found."
 
-    direction = result.get("direction", "up")
+    A, B, C, D = result['A'][1], result['B'][1], result['C'][1], result['D'][1]
+    direction = result['direction']
+
     if direction == "up":
-        A = result['A'][1]
-        B = result['B'][1]
-        C = result['C'][1]
         move_distance = B - A
         retracement_ratio = (B - C) / move_distance if move_distance != 0 else 0
-
-        extension_ratio = None
-        if "D" in result:
-            D = result["D"][1]
-            extension_ratio = (D - C) / move_distance
-
-        # Define thresholds (these are examples; adjust as needed)
-        if retracement_ratio < 0.382:
-            status = "Progressive move (shallow retracement)"
-        elif retracement_ratio >= 0.618:
-            status = "Failed move (deep retracement)"
-        else:
-            status = "Successful move (moderate retracement)"
-
-        if extension_ratio is not None:
-            if extension_ratio > 1.0:
-                status += " with strong extension"
-            elif extension_ratio < 0.5:
-                status += " with weak extension"
-
-        return status
+        extension_ratio = (D - C) / move_distance if move_distance != 0 else None
     else:
-        # For a downward move, flip the ratios
-        A = result['A'][1]
-        B = result['B'][1]
-        C = result['C'][1]
         move_distance = A - B
         retracement_ratio = (C - B) / move_distance if move_distance != 0 else 0
+        extension_ratio = (C - D) / move_distance if move_distance != 0 else None
 
-        extension_ratio = None
-        if "D" in result:
-            D = result["D"][1]
-            extension_ratio = (C - D) / move_distance
+    # Classify move
+    if retracement_ratio < 0.382:
+        status = "Progressive move (shallow retracement)"
+    elif retracement_ratio >= 0.618:
+        status = "Failed move (deep retracement)"
+    else:
+        status = "Successful move (moderate retracement)"
 
-        if retracement_ratio < 0.382:
-            status = "Progressive move (shallow retracement)"
-        elif retracement_ratio >= 0.618:
-            status = "Failed move (deep retracement)"
-        else:
-            status = "Successful move (moderate retracement)"
+    if extension_ratio is not None:
+        if extension_ratio > 1.0:
+            status += " with strong extension"
+        elif extension_ratio < 0.5:
+            status += " with weak extension"
 
-        if extension_ratio is not None:
-            if extension_ratio > 1.0:
-                status += " with strong extension"
-            elif extension_ratio < 0.5:
-                status += " with weak extension"
+    return status
 
-        return status
+# Run Analysis on BTC Data
+result = find_retracement_extension(prices)
+plot_fib_retracement(prices, result)
+analysis = analyze_move(result)
 
-
-# Sample price data for upward and downward moves
-up_prices = [10, 12, 15, 20, 25, 30, 28, 25, 20, 22, 28, 25, 30, 35, 40]
-## Example of price data for an upward move that results in a failed move:
-up_prices = [10, 15, 22, 30, 15, 18, 20, 25, 28, 27, 30]
-
-down_prices = [40, 38, 35, 30, 25, 20, 22, 25, 30, 28, 22, 25, 20, 15, 10]
-
-thresh = 0.3
-nested_thresh = 0.2
-
-# Analyze upward move
-up_result = find_retracement_extension(up_prices, threshold=thresh, nested_threshold=nested_thresh, direction="up")
-plot_fib_retracement(up_prices, up_result)
-up_analysis = analyze_move(up_result, up_prices)
-print("Upward Move - Identified points:", up_result)
-print("Upward Move Analysis:", up_analysis)
-
-# Analyze downward move
-down_result = find_retracement_extension(down_prices, threshold=thresh, nested_threshold=nested_thresh,
-                                         direction="down")
-plot_fib_retracement(down_prices, down_result)
-down_analysis = analyze_move(down_result, down_prices)
-print("Downward Move - Identified points:", down_result)
-print("Downward Move Analysis:", down_analysis)
+print(f"Detected trend: {result['direction']}")
+print(f"Identified points: {result}")
+print(f"Analysis: {analysis}")
 
 plt.show()
