@@ -1,11 +1,6 @@
 import matplotlib.pyplot as plt
 import pandas as pd
-
-# Load BTC data
-df = pd.read_csv("BTCUSDT-hourly-historical-price.csv")
-Prices = df["close"].dropna().iloc[200:800]
-prices = Prices.tolist()
-
+import numpy as np
 
 
 def detect_trend(prices):
@@ -15,37 +10,88 @@ def detect_trend(prices):
     else:
         return "down"
 
+
+def find_best_starting_point(prices, window=50):
+    """
+    Find the best starting point for Fibonacci retracement analysis.
+    Uses a rolling window to find significant local minima or maxima.
+
+    Args:
+    prices (list): Price series
+    window (int): Size of the rolling window to search for local extrema
+
+    Returns:
+    int: Index of the best starting point
+    """
+    direction = detect_trend(prices)
+
+    # Use numpy for efficient rolling window calculation
+    prices_array = np.array(prices)
+
+    if direction == "up":
+        # For uptrend, look for a local minimum
+        local_mins = []
+        for i in range(window, len(prices) - window):
+            local_window = prices_array[i - window:i + window]
+            if prices_array[i] == np.min(local_window):
+                local_mins.append((i, prices_array[i]))
+
+        # Select the local minimum with the lowest price
+        if local_mins:
+            return min(local_mins, key=lambda x: x[1])[0]
+    else:
+        # For downtrend, look for a local maximum
+        local_maxs = []
+        for i in range(window, len(prices) - window):
+            local_window = prices_array[i - window:i + window]
+            if prices_array[i] == np.max(local_window):
+                local_maxs.append((i, prices_array[i]))
+
+        # Select the local maximum with the highest price
+        if local_maxs:
+            return max(local_maxs, key=lambda x: x[1])[0]
+
+    # Fallback to a point near the start if no suitable point found
+    return len(prices) // 4
+
+
 def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2):
     """
     Find Fibonacci retracement points in price data dynamically.
-    Now automatically detects trend direction.
+    Improved version with better starting point selection.
     """
-    direction = detect_trend(prices)
-    A = 0
+    # Find a better starting point
+    A = find_best_starting_point(prices)
+
+    direction = detect_trend(prices[A:])
+
+    # Adjust prices to start from the new A point
+    prices_subset = prices[A:]
+
     B, C, D = None, None, None
 
     # Find B (Swing High/Low)
     if direction == "up":
-        B = max(range(1, len(prices) - 1), key=lambda i: prices[i])  # Find highest point
+        B = max(range(1, len(prices_subset) - 1), key=lambda i: prices_subset[i])  # Find highest point
     else:
-        B = min(range(1, len(prices) - 1), key=lambda i: prices[i])  # Find lowest point
+        B = min(range(1, len(prices_subset) - 1), key=lambda i: prices_subset[i])  # Find lowest point
 
     if B is None:
         return None
 
     # Find C based on retracement threshold
     if direction == "up":
-        move = prices[B] - prices[A]
-        retracement_threshold = prices[B] - (move * threshold)
-        for j in range(B + 1, len(prices) - 1):
-            if prices[j] <= retracement_threshold:
+        move = prices_subset[B] - prices_subset[0]
+        retracement_threshold = prices_subset[B] - (move * threshold)
+        for j in range(B + 1, len(prices_subset) - 1):
+            if prices_subset[j] <= retracement_threshold:
                 C = j
                 break
     else:
-        move = prices[A] - prices[B]
-        retracement_threshold = prices[B] + (move * threshold)
-        for j in range(B + 1, len(prices) - 1):
-            if prices[j] >= retracement_threshold:
+        move = prices_subset[0] - prices_subset[B]
+        retracement_threshold = prices_subset[B] + (move * threshold)
+        for j in range(B + 1, len(prices_subset) - 1):
+            if prices_subset[j] >= retracement_threshold:
                 C = j
                 break
 
@@ -54,18 +100,19 @@ def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2):
 
     # Find D (Final Move Completion)
     if direction == "up":
-        D = max(range(C + 1, len(prices)), key=lambda i: prices[i])  # Find new high
+        D = max(range(C + 1, len(prices_subset)), key=lambda i: prices_subset[i])  # Find new high
     else:
-        D = min(range(C + 1, len(prices)), key=lambda i: prices[i])  # Find new low
+        D = min(range(C + 1, len(prices_subset)), key=lambda i: prices_subset[i])  # Find new low
 
-    # Ensure -23.6% level is crossed
-    move_extension = (prices[D] - prices[C]) / (prices[B] - prices[A])
-    if move_extension < -0.236:
-        print(f"Move complete: crossed -23.6% level at index {D}, price: {prices[D]}")
-    else:
-        print("Move not completed yet.")
+    # Adjust indices to original price series
+    return {
+        "A": (A + 0, prices[A + 0]),
+        "B": (A + B, prices[A + B]),
+        "C": (A + C, prices[A + C]),
+        "D": (A + D, prices[A + D]),
+        "direction": direction
+    }
 
-    return {"A": (A, prices[A]), "B": (B, prices[B]), "C": (C, prices[C]), "D": (D, prices[D]), "direction": direction}
 
 def plot_fib_retracement(prices, result):
     if not result:
@@ -79,7 +126,8 @@ def plot_fib_retracement(prices, result):
     plt.title(f'Fibonacci Retracement Analysis - {move_type} Move', fontsize=16)
 
     # Mark key points
-    points = {'A': ('black', result['A']), 'B': ('red', result['B']), 'C': ('green', result['C']), 'D': ('blue', result['D'])}
+    points = {'A': ('black', result['A']), 'B': ('red', result['B']), 'C': ('green', result['C']),
+              'D': ('blue', result['D'])}
     for label, (color, (idx, price)) in points.items():
         plt.scatter(idx, price, color=color, s=100, zorder=3)
         plt.text(idx, price, label, fontsize=14, fontweight='bold', ha='right', va='bottom', color=color)
@@ -98,6 +146,7 @@ def plot_fib_retracement(prices, result):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
+
 
 def analyze_move(result):
     """Analyze the retracement and extension ratios."""
@@ -132,13 +181,32 @@ def analyze_move(result):
 
     return status
 
-# Run Analysis on BTC Data
-result = find_retracement_extension(prices)
-plot_fib_retracement(prices, result)
-analysis = analyze_move(result)
 
-print(f"Detected trend: {result['direction']}")
-print(f"Identified points: {result}")
-print(f"Analysis: {analysis}")
+# Example usage
+def main():
+    # Load BTC data
+    df = pd.read_csv("BTCUSDT-hourly-historical-price.csv")
+    Prices = df["close"].dropna().iloc[200:800]
+    prices = Prices.tolist()
 
-plt.show()
+    # Run Analysis on BTC Data
+    result = find_retracement_extension(prices)
+
+    if result:
+        plot_fib_retracement(prices, result)
+        analysis = analyze_move(result)
+
+        print(f"Detected trend: {result['direction']}")
+        print(f"Identified points:")
+        for point, (idx, price) in result.items():
+            if point != 'direction':
+                print(f"{point}: Index {idx}, Price {price}")
+        print(f"Analysis: {analysis}")
+
+        plt.show()
+    else:
+        print("Could not find a valid Fibonacci retracement pattern.")
+
+
+if __name__ == "__main__":
+    main()
