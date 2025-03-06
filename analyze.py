@@ -13,7 +13,7 @@ def find_extreme_point(prices):
         return np.argmax(prices)  # Highest point for a downtrend
 
 def calculate_fibonacci_levels(high, low):
-    levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+    levels = [0.0, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
     return {level: high - (high - low) * level for level in levels}
 
 def find_fibonacci_points(prices, levels):
@@ -38,7 +38,7 @@ def analyze_pattern(points, prices):
     CD = prices[D] - prices[C] if prices[D] > prices[C] else prices[C] - prices[D]
     retracement_ratio = BC / AB if AB != 0 else 0
     extension_ratio = CD / AB if AB != 0 else 0
-    if 0.382 <= retracement_ratio <= 0.618 and extension_ratio > 1.0:
+    if 0.618 <= retracement_ratio <= 0.764 and extension_ratio > 1.0:
         return "Successful Fibonacci pattern detected."
     else:
         return "Fibonacci pattern failed."
@@ -63,7 +63,7 @@ def plot_fibonacci(prices, levels, points, conclusion):
 
 def main():
     df = pd.read_csv("BTCUSDT-hourly-historical-price.csv")
-    Prices = df["close"].dropna().iloc[0:500]
+    Prices = df["close"].dropna().iloc[0:100]
     prices = Prices.tolist()
     extreme_index = find_extreme_point(prices)
     high, low = max(prices), min(prices)
