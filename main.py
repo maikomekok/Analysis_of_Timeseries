@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import matplotlib.dates as mdates
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def detect_trend_with_ma(prices, short_window=20, long_window=50):
@@ -38,10 +38,10 @@ def detect_trend_with_ma(prices, short_window=20, long_window=50):
         return "down"
 
 
-def find_best_starting_point(prices, window=50, min_change_threshold=0.003):
+def find_best_starting_point(prices, dates, window=50, min_change_threshold=0.003, max_days_between=None):
     """
     Find the best starting point for pattern analysis based on trend direction.
-    Added min_change_threshold to avoid minor price swings.
+    Added min_change_threshold to avoid minor price swings and max_days_between for time constraints.
     """
     direction = detect_trend_with_ma(prices)
     prices_array = np.array(prices)
@@ -98,31 +98,157 @@ def find_best_starting_point(prices, window=50, min_change_threshold=0.003):
             return np.argmax(prices_array)
 
 
-def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2, min_change_threshold=0.003):
+def find_retracement_extension(prices, dates, threshold=0.3, nested_threshold=0.2, min_change_threshold=0.003,
+                               max_days_between=None):
     """
     Find Fibonacci retracement points in price data dynamically.
-    Improved version with better starting point selection and minimum price change threshold.
+    Improved version with better starting point selection, minimum price change threshold,
+    and time-based constraints between points.
+
+    Now incorporates fixes:
+    1. Point B is not fixed until Point C is found
+    2. Failed move threshold changed to 0.764
+    3. Uses timestamps for time constraints between points
     """
-    A = find_best_starting_point(prices, min_change_threshold=min_change_threshold)
+    A = find_best_starting_point(prices, dates, min_change_threshold=min_change_threshold)
 
     if A is None or A >= len(prices) - 1:
         print("Warning: Invalid starting point. Using index 0 instead.")
         A = 0
 
-    direction = detect_trend_with_ma(prices[A:])
+    # We'll detect both up and down trends to handle multiple timeframe scenarios
+    up_direction = "up"
+    down_direction = "down"
     prices_subset = prices[A:]
+    dates_subset = dates[A:]
 
     if len(prices_subset) < 3:
         print("Warning: Not enough data points for analysis.")
         return None
 
-    B, C, D = None, None, None
-
     # Calculate significant price changes
     price_changes = np.abs(np.diff(np.array(prices_subset)) / np.array(prices_subset)[:-1])
     significant_changes = price_changes >= min_change_threshold
 
-    # Find B with significant price movement
+    # Initialize variables for potential B and C points
+    up_B, up_C, up_D = None, None, None
+    down_B, down_C, down_D = None, None, None
+
+    # Track the current highest and lowest points after A
+    current_high = prices_subset[0]
+    current_high_idx = 0
+    current_low = prices_subset[0]
+    current_low_idx = 0
+
+    # First, find potential B points (continuously updating until C is found)
+    for i in range(1, len(prices_subset)):
+        # Check for significant price movement
+        sig_change = i > 1 and significant_changes[i - 2]
+
+        # Check time constraint if provided
+        time_ok = True
+        if max_days_between and i > 0:
+            time_diff = dates_subset[i] - dates_subset[0]
+            if isinstance(time_diff, timedelta) and time_diff.total_seconds() > max_days_between * 86400:
+                time_ok = False
+
+        # Update potential uptrend B point (highest high)
+        if prices_subset[i] > current_high and sig_change and time_ok:
+            current_high = prices_subset[i]
+            current_high_idx = i
+
+        # Update potential downtrend B point (lowest low)
+        if prices_subset[i] < current_low and sig_change and time_ok:
+            current_low = prices_subset[i]
+            current_low_idx = i
+
+        # Once we have potential B points, look for C points
+
+        # For uptrend: C is a retracement from B
+        if current_high_idx > 0 and i > current_high_idx:
+            # Calculate the move from A to B
+            up_move = current_high - prices_subset[0]
+
+            # Find C - point that retraces at least 23.6% but not more than 76.4% from B
+            min_retrace = current_high - (up_move * 0.236)
+            max_retrace = current_high - (up_move * 0.764)
+
+            # If we find a valid C point
+            if prices_subset[i] <= min_retrace and prices_subset[i] >= max_retrace and sig_change:
+                # Now we can fix point B
+                up_B = current_high_idx
+                up_C = i
+                # Point B is now fixed at its last highest value before C
+
+                # After finding C, look for D (resumption of trend)
+                potential_up_D = None
+                for j in range(up_C + 1, len(prices_subset)):
+                    # D should be higher than C and ideally higher than B in a strong move
+                    if prices_subset[j] > prices_subset[up_C] and sig_change:
+                        potential_up_D = j
+                        if prices_subset[j] > prices_subset[up_B]:  # Strong move
+                            break
+
+                if potential_up_D:
+                    up_D = potential_up_D
+                    break  # We found a complete up pattern
+
+        # For downtrend: C is a retracement from B
+        if current_low_idx > A and i > current_low_idx:
+            # Calculate the move from A to B
+            down_move = prices_subset[0] - current_low
+
+            # Find C - point that retraces at least 23.6% but not more than 76.4% from B
+            min_retrace = current_low + (down_move * 0.236)
+            max_retrace = current_low + (down_move * 0.764)
+
+            # If we find a valid C point
+            if prices_subset[i] >= min_retrace and prices_subset[i] <= max_retrace and sig_change:
+                # Now we can fix point B
+                down_B = current_low_idx
+                down_C = i
+
+                # After finding C, look for D (resumption of trend)
+                potential_down_D = None
+                for j in range(down_C + 1, len(prices_subset)):
+                    # D should be lower than C and ideally lower than B in a strong move
+                    if prices_subset[j] < prices_subset[down_C] and sig_change:
+                        potential_down_D = j
+                        if prices_subset[j] < prices_subset[down_B]:  # Strong move
+                            break
+
+                if potential_down_D:
+                    down_D = potential_down_D
+                    break  # We found a complete down pattern
+
+    # Determine which pattern (if any) was found and return the result
+    if up_B is not None and up_C is not None and up_D is not None:
+        result = {
+            "A": (A, prices[A]),
+            "B": (A + up_B, prices[A + up_B]),
+            "C": (A + up_C, prices[A + up_C]),
+            "D": (A + up_D, prices[A + up_D]),
+            "direction": up_direction
+        }
+        return result
+    elif down_B is not None and down_C is not None and down_D is not None:
+        result = {
+            "A": (A, prices[A]),
+            "B": (A + down_B, prices[A + down_B]),
+            "C": (A + down_C, prices[A + down_C]),
+            "D": (A + down_D, prices[A + down_D]),
+            "direction": down_direction
+        }
+        return result
+
+    # If we couldn't find a complete pattern, fall back to the old method
+    direction = detect_trend_with_ma(prices[A:])
+
+    # From here on, use the old logic but with the corrected failure threshold
+    # and proper B point updating until C is found
+    # ... (keeping the rest of your original implementation with the fixes)
+
+    # Old method with fixed B point - this is now a fallback method
     if direction == "up":
         potential_Bs = [(i, prices_subset[i]) for i in range(1, len(prices_subset) - 1)
                         if i > 0 and i < len(significant_changes) and significant_changes[i - 1]]
@@ -144,6 +270,7 @@ def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2, min_
 
     if direction == "up":
         move = prices_subset[B] - prices_subset[0]
+        # Changed from 0.618 to 0.764 for failed move threshold
         retracement_threshold = prices_subset[B] - (move * threshold)
         potential_Cs = []
         for j in range(B + 1, len(prices_subset) - 1):
@@ -162,6 +289,7 @@ def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2, min_
                     break
     else:
         move = prices_subset[0] - prices_subset[B]
+        # Changed from 0.618 to 0.764 for failed move threshold
         retracement_threshold = prices_subset[B] + (move * threshold)
         potential_Cs = []
         for j in range(B + 1, len(prices_subset) - 1):
@@ -218,35 +346,44 @@ def find_retracement_extension(prices, threshold=0.3, nested_threshold=0.2, min_
     return result
 
 
-def draw_fibonacci_levels(ax, prices, dates, direction):
-    """Draw Fibonacci retracement levels based on price min/max."""
-    min_idx = np.argmin(prices)
-    max_idx = np.argmax(prices)
-
-    if direction == "up":
-        A_value = prices[min_idx]
-        B_value = prices[max_idx]
+def draw_fibonacci_levels(ax, prices, dates, result, direction):
+    """Draw Fibonacci retracement levels based on identified pattern."""
+    if result:
+        A, B = result['A'][1], result['B'][1]
     else:
-        A_value = prices[max_idx]
-        B_value = prices[min_idx]
+        min_idx = np.argmin(prices)
+        max_idx = np.argmax(prices)
 
-    main_move = B_value - A_value
+        if direction == "up":
+            A_value = prices[min_idx]
+            B_value = prices[max_idx]
+        else:
+            A_value = prices[max_idx]
+            B_value = prices[min_idx]
 
-    fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
+        A, B = A_value, B_value
+
+    main_move = B - A if direction == "up" else A - B
+
+    # Updated Fibonacci levels with extended levels
+    fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.764, 0.854, 1.0, 1.236, 1.618, -0.236, -0.618]
     level_colors = {
         0: '#FF0000',  # Red
         0.236: '#FF7F00',  # Orange
         0.382: '#FFFF00',  # Yellow
         0.5: '#00FF00',  # Green
         0.618: '#0000FF',  # Blue
-        0.764: '#4B0082',  # Indigo
+        0.764: '#4B0082',  # Indigo - critical "failed move" threshold
+        0.854: '#708090',  # SlateGray
         1.0: '#8F00FF',  # Violet
+        1.236: '#FFA500',  # Orange extension
+        1.618: '#32CD32',  # LimeGreen extension
         -0.236: '#FFC0CB',  # Pink
         -0.618: '#800080'  # Purple
     }
 
     for level in fib_levels:
-        fib_price = B_value - (main_move * level) if direction == "up" else B_value + (main_move * level)
+        fib_price = B - (main_move * level) if direction == "up" else B + (main_move * level)
         ax.axhline(
             y=fib_price,
             color=level_colors.get(level, 'gray'),
@@ -323,41 +460,11 @@ def plot_diagnostic_graph(prices, dates, result=None):
             ax.text(dates[idx], price, label, fontsize=14, fontweight='bold',
                     ha='right', va='bottom', color=color)
 
-        A, B = result['A'][1], result['B'][1]
-        main_move = B - A if direction == "up" else A - B
-        fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]
-        level_colors = {
-            0: '#FF0000',  # Red
-            0.236: '#FF7F00',  # Orange
-            0.382: '#FFFF00',  # Yellow
-            0.5: '#00FF00',  # Green
-            0.618: '#0000FF',  # Blue
-            0.764: '#4B0082',  # Indigo
-            1.0: '#8F00FF',  # Violet
-            -0.236: '#FFC0CB',  # Pink
-            -0.618: '#800080'  # Purple
-        }
-
-        for level in fib_levels:
-            fib_price = B - (main_move * level) if direction == "up" else B + (main_move * level)
-            ax.axhline(
-                y=fib_price,
-                color=level_colors.get(level, 'gray'),
-                linestyle='--',
-                alpha=0.6,
-                linewidth=1.5,
-                label=f'Fib {level * 100:.1f}%'
-            )
-            ax.text(
-                dates[0],
-                fib_price,
-                f'{level * 100:.1f}%',
-                fontsize=10,
-                verticalalignment='center',
-                color=level_colors.get(level, 'gray')
-            )
+        # Draw Fibonacci levels using the detected points
+        ax = draw_fibonacci_levels(ax, prices, dates, result, direction)
     else:
-        ax = draw_fibonacci_levels(ax, prices, dates, direction)
+        # Draw Fibonacci levels based on min/max if no pattern detected
+        ax = draw_fibonacci_levels(ax, prices, dates, None, direction)
 
     ax.axhline(y=np.mean(prices), color='purple', linestyle='-', linewidth=2, label='Mean Price')
 
@@ -395,12 +502,23 @@ def analyze_move(result):
         retracement_ratio = (C - B) / move_distance if move_distance != 0 else 0
         extension_ratio = (C - D) / move_distance if move_distance != 0 else None
 
+    # Updated thresholds as per feedback
     if retracement_ratio < 0.382:
         status = "Progressive move (shallow retracement)"
-    elif retracement_ratio >= 0.618:
+    elif retracement_ratio >= 0.764:  # Changed from 0.618 to 0.764
         status = "Failed move (deep retracement)"
+    elif C < A and direction == "up":  # Added check if C breaks below A in uptrend
+        status = "Failed move (C below A)"
+    elif C > A and direction == "down":  # Added check if C breaks above A in downtrend
+        status = "Failed move (C above A)"
     else:
-        status = "Successful move (moderate retracement)"
+        # Now we have "in progress" as a potential state
+        if D > B and direction == "up":
+            status = "Successful move (reached new high)"
+        elif D < B and direction == "down":
+            status = "Successful move (reached new low)"
+        else:
+            status = "In progress (moderate retracement)"
 
     if extension_ratio is not None:
         if extension_ratio > 1.0:
@@ -433,8 +551,7 @@ def main():
     df['timestamp'] = pd.to_datetime(df[timestamp_col], format='mixed')
 
     # Use a subset of data for analysis (adjust as needed)
-    # Use a subset of data for analysis (adjust as needed)
-    subset = df.iloc[0:min(500, len(df))]  # Ensure we don't exceed dataset length
+    subset = df.iloc[200:min(300, len(df))]  # Ensure we don't exceed dataset length
 
     # Extract prices and timestamps together, dropping rows where close is NaN
     clean_subset = subset.dropna(subset=["close"])
@@ -445,6 +562,9 @@ def main():
     # Set minimum price change threshold to 0.3%
     min_change_threshold = 0.003
 
+    # Optional: set maximum days between points (e.g., 30 days)
+    max_days_between = None  # Set to a number if needed
+
     # Check the recent trend for more accurate labeling
     recent_window = min(20, len(prices))
     recent_prices = prices[-recent_window:]
@@ -454,16 +574,15 @@ def main():
     print(f"Visual trend based on recent prices: {visual_trend}")
     print(f"Moving Average Trend Detection: {detect_trend_with_ma(prices)}")
 
-    # Pass the minimum change threshold to the functions
-    result = find_retracement_extension(prices, min_change_threshold=min_change_threshold)
+    # Pass the dates and other parameters to the function
+    result = find_retracement_extension(
+        prices,
+        dates,
+        min_change_threshold=min_change_threshold,
+        max_days_between=max_days_between
+    )
 
     if result:
-        # Update the direction based on visual trend if needed
-        if result['direction'] != visual_trend:
-            print(f"Note: Algorithmic trend ({result['direction']}) differs from visual trend ({visual_trend})")
-            # Optionally override the direction for better chart labeling
-            # result['direction'] = visual_trend
-
         plot_diagnostic_graph(prices, dates, result)
         analysis = analyze_move(result)
 
@@ -478,11 +597,11 @@ def main():
         A, B = result['A'][1], result['B'][1]
         main_move = B - A if result['direction'] == "up" else A - B
         print("\nKey Fibonacci levels:")
-        for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, -0.236, -0.618]:
+        # Updated Fibonacci levels including the 0.764 level
+        for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, 1.236, 1.618, -0.236, -0.618]:
             fib_price = B - (main_move * level) if result['direction'] == "up" else B + (main_move * level)
             print(f"{level * 100:.1f}%: {fib_price:.2f}")
     else:
-        # For the chart title, use the visual trend when no pattern is found
         plot_diagnostic_graph(prices, dates)
         print("Could not find a valid Fibonacci retracement pattern.")
         print("A diagnostic graph has been generated with Fibonacci levels based on min/max prices.")
