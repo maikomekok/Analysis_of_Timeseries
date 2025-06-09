@@ -141,7 +141,6 @@ def analyze_bitcoin_data():
 
             print(f"Running analysis with window_sizes={window_sizes}, overlap={overlap_percent}%")
             print(f"Pattern config: {pattern_config}")
-
             all_patterns = analyze_multiple_windows(
                 prices,
                 dates,
@@ -149,8 +148,10 @@ def analyze_bitcoin_data():
                 overlap_percent=overlap_percent,
                 min_change_threshold=min_change,
                 allow_multiple_patterns=True,
-                detect_long_failures=True
+                detect_long_failures=True,
+                pattern_config=pattern_config
             )
+
 
             print(f"Found {len(all_patterns)} patterns")
 
