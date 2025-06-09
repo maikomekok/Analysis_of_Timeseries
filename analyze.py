@@ -5,6 +5,353 @@ import matplotlib.dates as mdates
 from datetime import datetime, timedelta
 
 
+def find_all_overlapping_patterns(prices, dates, min_change_pct=0.005, config=None):
+    """
+    Comprehensive pattern detection using your existing config system
+    """
+    if config is None:
+        config = {}
+
+    all_patterns = []
+
+    print("=== COMPREHENSIVE PATTERN DETECTION ===")
+    print("Finding ALL overlapping upward and downward patterns...")
+
+    print("\n--- Traditional Patterns ---")
+
+    absolute_low_idx = prices.index(min(prices))
+    absolute_low_price = min(prices)
+    upward_patterns = find_patterns_from_point(
+        prices, dates, absolute_low_idx, absolute_low_price, "up",
+        min_change_pct, config  # Just pass your existing config
+    )
+    all_patterns.extend(upward_patterns)
+
+    absolute_high_idx = prices.index(max(prices))
+    absolute_high_price = max(prices)
+    downward_patterns = find_patterns_from_point(
+        prices, dates, absolute_high_idx, absolute_high_price, "down",
+        min_change_pct, config  # Just pass your existing config
+    )
+    all_patterns.extend(downward_patterns)
+
+    print("\n--- Local Extremes Patterns ---")
+
+    min_move_multiplier = config.get("min_move_multiplier", 2.0)
+    local_extremes = find_significant_extremes(prices, min_change_pct * min_move_multiplier)
+
+    for extreme in local_extremes:
+        idx, price, extreme_type = extreme
+
+        if extreme_type == "high":
+            down_patterns = find_patterns_from_point(
+                prices, dates, idx, price, "down", min_change_pct, config
+            )
+            all_patterns.extend(down_patterns)
+
+        elif extreme_type == "low":
+            up_patterns = find_patterns_from_point(
+                prices, dates, idx, price, "up", min_change_pct, config
+            )
+            all_patterns.extend(up_patterns)
+
+    print("\n--- Overlapping Pattern Analysis ---")
+
+    completed_patterns = [p for p in all_patterns if p.get('status') == 'completed']
+
+    for pattern in completed_patterns:
+        opposite_patterns = find_opposite_overlapping_patterns(
+            prices, dates, pattern, min_change_pct, config  # Use same config
+        )
+        all_patterns.extend(opposite_patterns)
+
+    unique_patterns = remove_duplicate_patterns(all_patterns)
+    unique_patterns.sort(key=lambda p: calculate_pattern_significance(p), reverse=True)
+
+    print(f"\n=== COMPREHENSIVE RESULTS ===")
+    print(f"Total patterns found: {len(unique_patterns)}")
+
+    status_summary = {}
+    for pattern in unique_patterns:
+        direction = pattern.get('direction', 'unknown')
+        status = pattern.get('status', 'unknown')
+        key = f"{direction}_{status}"
+        status_summary[key] = status_summary.get(key, 0) + 1
+
+    for key, count in status_summary.items():
+        direction, status = key.split('_')
+        print(f"  {direction.upper()} {status}: {count}")
+
+    return unique_patterns
+
+
+def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_change_pct, config):
+    """
+    Find all valid patterns starting from a specific A point
+    Uses your existing config system - no separate parameters
+    """
+    patterns = []
+
+    retracement_target = config.get("retracement_target", 0.5)
+    retracement_tolerance = config.get("retracement_tolerance", 0.02)
+    completion_extension = config.get("completion_extension", 0.236)
+    failure_level = config.get("failure_level", 0.764)
+    min_move_multiplier = config.get("min_move_multiplier", 2.0)
+
+    print(f"  Finding {direction} patterns from A: Index {A_idx}, Price ${A_price:.2f}")
+
+    valid_B_candidates = []
+
+    for B_idx in range(A_idx + 1, len(prices)):
+        B_price = prices[B_idx]
+
+        if direction == "up":
+            move_AB = B_price - A_price
+            if move_AB <= 0:
+                continue
+        else:  # down
+            move_AB = A_price - B_price
+            if move_AB <= 0:
+                continue
+
+        move_pct = (move_AB / A_price) * 100
+        if move_pct < min_change_pct * min_move_multiplier * 100:
+            continue
+
+        if direction == "up":
+            target_C_price = B_price - move_AB * retracement_target
+        else:
+            target_C_price = B_price + move_AB * retracement_target
+
+        tolerance_range = move_AB * retracement_tolerance
+        min_C_price = target_C_price - tolerance_range
+        max_C_price = target_C_price + tolerance_range
+
+        # Look for valid C
+        valid_C_found = None
+        for i in range(B_idx + 1, len(prices)):
+            if min_C_price <= prices[i] <= max_C_price:
+                valid_C_found = (i, prices[i])
+                break
+
+        if valid_C_found:
+            C_idx, C_price = valid_C_found
+            valid_B_candidates.append({
+                'B_idx': B_idx,
+                'B_price': B_price,
+                'move_AB': move_AB,
+                'move_pct': move_pct,
+                'C_idx': C_idx,
+                'C_price': C_price,
+                'target_C_price': target_C_price
+            })
+
+    if not valid_B_candidates:
+        return patterns
+
+    if direction == "up":
+        valid_B_candidates.sort(key=lambda x: x['B_price'], reverse=True)
+    else:
+        valid_B_candidates.sort(key=lambda x: x['B_price'])
+
+    # Create patterns from top candidates
+    for i, candidate in enumerate(valid_B_candidates[:3]):  # Top 3 candidates
+
+        B_idx = candidate['B_idx']
+        B_price = candidate['B_price']
+        move_AB = candidate['move_AB']
+        move_pct = candidate['move_pct']
+        C_idx = candidate['C_idx']
+        C_price = candidate['C_price']
+
+        if direction == "up":
+            actual_retracement = B_price - C_price
+        else:
+            actual_retracement = C_price - B_price
+
+        retracement_pct = (actual_retracement / move_AB) * 100
+
+        if direction == "up":
+            failure_level_price = B_price - move_AB * failure_level
+            completion_level_price = B_price + move_AB * completion_extension
+        else:
+            failure_level_price = B_price + move_AB * failure_level
+            completion_level_price = B_price - move_AB * completion_extension
+
+        # Find D point and status
+        pattern_status = None
+        D_idx = None
+        D_price = None
+
+        if C_idx + 1 < len(prices):
+            prices_after_C = prices[C_idx + 1:]
+            indices_after_C = list(range(C_idx + 1, len(prices)))
+
+            for j, price in enumerate(prices_after_C):
+                current_idx = indices_after_C[j]
+
+                # Check for failure or completion based on direction
+                if direction == "up":
+                    if price < failure_level_price:
+                        D_idx = current_idx
+                        D_price = price
+                        pattern_status = "failed"
+                        break
+                    elif price >= completion_level_price:
+                        D_idx = current_idx
+                        D_price = price
+                        pattern_status = "completed"
+                        break
+                else:  # down
+                    if price > failure_level_price:
+                        D_idx = current_idx
+                        D_price = price
+                        pattern_status = "failed"
+                        break
+                    elif price <= completion_level_price:
+                        D_idx = current_idx
+                        D_price = price
+                        pattern_status = "completed"
+                        break
+
+        # Create pattern if definitive status found
+        if pattern_status is not None and D_price is not None:
+
+            # Validate D position relative to A
+            valid_D = False
+            if direction == "up":
+                valid_D = (pattern_status == "failed") or (D_price > A_price)
+            else:
+                valid_D = (pattern_status == "failed") or (D_price < A_price)
+
+            if valid_D:
+                pattern = {
+                    "direction": direction,
+                    "A": (A_idx, A_price),
+                    "B": (B_idx, B_price),
+                    "C": (C_idx, C_price),
+                    "D": (D_idx, D_price),
+                    "initial_move_pct": move_pct,
+                    "retracement_pct": retracement_pct,
+                    "target_level": candidate['target_C_price'],
+                    "failure_level": failure_level_price,
+                    "completion_level": completion_level_price,
+                    "status": pattern_status,
+                    "pattern_rank": i + 1,
+                    "pattern_type": "comprehensive",
+                    "A_type": "absolute" if A_idx in [prices.index(min(prices)), prices.index(max(prices))] else "local"
+                }
+
+                patterns.append(pattern)
+
+                print(f"    {direction.upper()} pattern created (rank #{i + 1}, {pattern_status}):")
+                print(f"      A: ${A_price:.2f}, B: ${B_price:.2f}, C: ${C_price:.2f}, D: ${D_price:.2f}")
+
+    return patterns
+
+
+def find_opposite_overlapping_patterns(prices, dates, reference_pattern, min_change_pct, config):
+    """
+    For a completed pattern in one direction, look for failed patterns in opposite direction
+    Uses your existing config - no separate parameters
+    """
+    patterns = []
+
+    ref_direction = reference_pattern['direction']
+    ref_A_idx = reference_pattern['A'][0]
+    ref_D_idx = reference_pattern['D'][0]
+
+    opposite_direction = "down" if ref_direction == "up" else "up"
+
+    print(f"    Looking for overlapping {opposite_direction} patterns...")
+
+    # Look for A points in the opposite direction within the reference pattern timeframe
+    if opposite_direction == "up":
+        # Look for local lows between reference A and D
+        for i in range(ref_A_idx, ref_D_idx):
+            if i > 5 and i < len(prices) - 5:
+                if prices[i] == min(prices[i - 5:i + 6]):  # Local low
+                    opposite_patterns = find_patterns_from_point(
+                        prices, dates, i, prices[i], opposite_direction, min_change_pct, config
+                    )
+                    # Only keep patterns that overlap with reference pattern
+                    for pattern in opposite_patterns:
+                        if pattern['D'][0] >= ref_A_idx and pattern['A'][0] <= ref_D_idx:
+                            pattern['overlap_with'] = f"{ref_direction}_{reference_pattern['status']}"
+                            patterns.append(pattern)
+    else:
+        # Look for local highs between reference A and D
+        for i in range(ref_A_idx, ref_D_idx):
+            if i > 5 and i < len(prices) - 5:
+                if prices[i] == max(prices[i - 5:i + 6]):  # Local high
+                    opposite_patterns = find_patterns_from_point(
+                        prices, dates, i, prices[i], opposite_direction, min_change_pct, config
+                    )
+                    # Only keep patterns that overlap with reference pattern
+                    for pattern in opposite_patterns:
+                        if pattern['D'][0] >= ref_A_idx and pattern['A'][0] <= ref_D_idx:
+                            pattern['overlap_with'] = f"{ref_direction}_{reference_pattern['status']}"
+                            patterns.append(pattern)
+
+    return patterns
+
+
+# Utility functions remain the same but cleaner
+def find_significant_extremes(prices, min_change_threshold):
+    """Find significant local highs and lows - simplified"""
+    extremes = []
+
+    for i in range(5, len(prices) - 5):
+        # Local high
+        if prices[i] == max(prices[i - 5:i + 6]):
+            extremes.append((i, prices[i], "high"))
+        # Local low
+        elif prices[i] == min(prices[i - 5:i + 6]):
+            extremes.append((i, prices[i], "low"))
+
+    return extremes
+
+
+def remove_duplicate_patterns(patterns):
+    """Remove duplicate patterns"""
+    unique_patterns = []
+    seen_signatures = set()
+
+    for pattern in patterns:
+        signature = (
+            pattern['A'][0], pattern['B'][0],
+            pattern['C'][0], pattern['D'][0],
+            pattern['direction']
+        )
+
+        if signature not in seen_signatures:
+            seen_signatures.add(signature)
+            unique_patterns.append(pattern)
+
+    return unique_patterns
+
+
+def calculate_pattern_significance(pattern):
+    """Enhanced significance calculation"""
+    base_score = pattern.get('initial_move_pct', 0) / 5
+
+    if pattern.get('status') == 'completed':
+        base_score += 5
+    elif pattern.get('status') == 'failed':
+        base_score += 3
+
+    if pattern.get('A_type') == 'absolute':
+        base_score += 2
+
+    retrace_pct = pattern.get('retracement_pct', 0)
+    retrace_quality = 1.0 - abs(retrace_pct - 50) / 50
+    base_score += retrace_quality * 2
+
+    if 'overlap_with' in pattern:
+        base_score += 1.5
+
+    return base_score
+
 def detect_trend_with_ma(prices, short_window=20, long_window=50):
     """
     LEGACY FUNCTION: Kept for backward compatibility.
