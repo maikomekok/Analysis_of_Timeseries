@@ -1,19 +1,17 @@
 {
     "min_change": 0.005,
-    "window_sizes": [100, 300, 600,1000],
+    "window_sizes": [100, 300, 600, 1000],
     "overlap": 10,
     "top_patterns": 10,
     "time_window": 120,
-
-   "pattern_detection": {
-    "retracement_target": 0.5,
-    "failure_level": 0.8,
-    "completion_extension": 0.236,
-    "retracement_tolerance": 0,
-    "use_strict_swing_points": false,
-    "min_move_multiplier": 1.5,
-    "only_show_significant": true,
-    "significant_patterns_only": ["completed", "failed"]
-
+    "pattern_detection": {
+        "retracement_target": 0.5,
+        "failure_level": 0.764,
+        "completion_extension": 0.236,
+        "retracement_tolerance": 0.02,
+        "use_strict_swing_points": false,
+        "min_move_multiplier": 2.0,
+        "only_show_significant": true,
+        "significant_patterns_only": ["completed", "failed"]
     }
 }

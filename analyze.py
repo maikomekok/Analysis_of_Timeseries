@@ -62,9 +62,11 @@ def detect_multiple_timeframe_trends(prices, windows=[(5, 10), (20, 50), (50, 20
     return trends
 
 
+# Updated analyze.py - Modified pattern detection functions to only return "failed" or "completed"
+
 def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
     """
-    Extract existing uptrend logic from find_significant_price_patterns
+    Extract existing uptrend logic but only return patterns with definitive status
     """
     if config is None:
         config = {}
@@ -134,26 +136,22 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
         failure_level = B_price - move_AB * failure_level_pct
         completion_level = B_price + move_AB * completion_extension
 
-        # Step 4: Determine D point and pattern status
-        D_idx = len(prices) - 1
-        D_price = prices[D_idx]
-        pattern_status = "in_progress"
+        # Step 4: Determine D point and pattern status - ONLY failed or completed
+        pattern_status = None
+        D_idx = None
+        D_price = None
 
-        # Analyze price action after C
+        # Analyze price action after C to find definitive completion or failure
         if C_idx + 1 < len(prices):
             prices_after_C = prices[C_idx + 1:]
             indices_after_C = list(range(C_idx + 1, len(prices)))
 
-            # Check each price after C
-            broke_failure = False
-            reached_completion = False
-
+            # Check each price after C for definitive status
             for i, price in enumerate(prices_after_C):
                 current_idx = indices_after_C[i]
 
                 # Check if price breaks below failure level (76.4%)
-                if price < failure_level and not reached_completion:
-                    broke_failure = True
+                if price < failure_level:
                     D_idx = current_idx
                     D_price = price
                     pattern_status = "failed"
@@ -161,52 +159,41 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
 
                 # Check if price reaches completion level (-23.6%)
                 elif price >= completion_level:
-                    reached_completion = True
                     D_idx = current_idx
                     D_price = price
                     pattern_status = "completed"
                     break
 
-            # If neither failure nor completion, find the highest point after C that's above A
-            if pattern_status == "in_progress":
-                points_above_A = [(indices_after_C[i], p) for i, p in enumerate(prices_after_C) if p > A_price]
-                if points_above_A:
-                    D_idx, D_price = max(points_above_A, key=lambda x: x[1])
+        # Only create pattern if we have a definitive status
+        if pattern_status is not None and D_price is not None:
 
-        # Strict requirement: D must be above A
-        if D_price <= A_price:
-            valid_D_points = [(i, prices[i]) for i in range(C_idx + 1, len(prices)) if prices[i] > A_price]
-            if valid_D_points:
-                D_idx, D_price = valid_D_points[0]
-            else:
-                print(f"UPTREND - Skipping pattern: no valid D point above A (${A_price:.2f})")
-                continue
+            # Strict requirement: D must be above A for uptrend
+            if pattern_status == "failed" or D_price > A_price:
+                # Create pattern
+                pattern = {
+                    "direction": "up",
+                    "A": (A_idx, A_price),
+                    "B": (B_idx, B_price),
+                    "C": (C_idx, C_price),
+                    "D": (D_idx, D_price),
+                    "initial_move_pct": move_pct,
+                    "retracement_pct": retracement_pct,
+                    "target_level": target_C_price,
+                    "failure_level": failure_level,
+                    "completion_level": completion_level,
+                    "status": pattern_status
+                }
 
-        # Create pattern
-        pattern = {
-            "direction": "up",
-            "A": (A_idx, A_price),
-            "B": (B_idx, B_price),
-            "C": (C_idx, C_price),
-            "D": (D_idx, D_price),
-            "initial_move_pct": move_pct,
-            "retracement_pct": retracement_pct,
-            "target_level": target_C_price,
-            "failure_level": failure_level,
-            "completion_level": completion_level,
-            "status": pattern_status
-        }
+                patterns.append(pattern)
 
-        patterns.append(pattern)
-
-        print(f"UPTREND pattern created:")
-        print(f"  A (absolute low): Index {A_idx}, Price ${A_price:.2f}")
-        print(f"  B (high): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
-        print(f"  C (50% retrace): Index {C_idx}, Price ${C_price:.2f} (retrace: {retracement_pct:.2f}%)")
-        print(f"  D: Index {D_idx}, Price ${D_price:.2f} (status: {pattern_status})")
-        print(f"  Failure level (76.4%): ${failure_level:.2f}")
-        print(f"  Completion level (-23.6%): ${completion_level:.2f}")
-        print()
+                print(f"UPTREND pattern created:")
+                print(f"  A (absolute low): Index {A_idx}, Price ${A_price:.2f}")
+                print(f"  B (high): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
+                print(f"  C (50% retrace): Index {C_idx}, Price ${C_price:.2f} (retrace: {retracement_pct:.2f}%)")
+                print(f"  D: Index {D_idx}, Price ${D_price:.2f} (status: {pattern_status})")
+                print(f"  Failure level (76.4%): ${failure_level:.2f}")
+                print(f"  Completion level (-23.6%): ${completion_level:.2f}")
+                print()
 
     return patterns
 
@@ -214,6 +201,7 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
 def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
     """
     Detect downtrend patterns: A (absolute high) → B (low) → C (50% retrace) → D (below A)
+    Only return patterns with definitive "failed" or "completed" status
     """
     if config is None:
         config = {}
@@ -231,7 +219,6 @@ def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
     A_price = max(prices)
 
     print(f"DOWNTREND - A point (absolute high): Index {A_idx}, Price ${A_price:.2f}")
-
 
     valid_AB_pairs = []
 
@@ -265,7 +252,7 @@ def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
         print("DOWNTREND - No valid A-B-C combinations found")
         return patterns
 
-    #the best B point (largest move that has valid C)
+    # Select the best B point (largest move that has valid C)
     valid_AB_pairs.sort(key=lambda x: x[0], reverse=True)
 
     # Take the top few candidates
@@ -279,26 +266,22 @@ def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
         failure_level = B_price + move_AB * failure_level_pct  # 76.4% back up toward A
         completion_level = B_price - move_AB * completion_extension  # -23.6% extension below B
 
-        # Step 4: Determine D point and pattern status
-        D_idx = len(prices) - 1
-        D_price = prices[D_idx]
-        pattern_status = "IP"
+        # Step 4: Determine D point and pattern status - ONLY failed or completed
+        pattern_status = None
+        D_idx = None
+        D_price = None
 
-        # Analyze price action after C
+        # Analyze price action after C to find definitive completion or failure
         if C_idx + 1 < len(prices):
             prices_after_C = prices[C_idx + 1:]
             indices_after_C = list(range(C_idx + 1, len(prices)))
 
-            # Check each price after C
-            broke_failure = False
-            reached_completion = False
-
+            # Check each price after C for definitive status
             for i, price in enumerate(prices_after_C):
                 current_idx = indices_after_C[i]
 
                 # Check if price breaks above failure level (76.4%)
-                if price > failure_level and not reached_completion:
-                    broke_failure = True
+                if price > failure_level:
                     D_idx = current_idx
                     D_price = price
                     pattern_status = "failed"
@@ -306,57 +289,86 @@ def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
 
                 # Check if price reaches completion level (-23.6%)
                 elif price <= completion_level:
-                    reached_completion = True
                     D_idx = current_idx
                     D_price = price
                     pattern_status = "completed"
                     break
 
-            # If neither failure nor completion, find the lowest point after C that's below A
-            if pattern_status == "in_progress":
-                points_below_A = [(indices_after_C[i], p) for i, p in enumerate(prices_after_C) if p < A_price]
-                if points_below_A:
-                    D_idx, D_price = min(points_below_A, key=lambda x: x[1])
+        # Only create pattern if we have a definitive status
+        if pattern_status is not None and D_price is not None:
 
-        # Strict requirement: D must be below A
-        if D_price >= A_price:
-            valid_D_points = [(i, prices[i]) for i in range(C_idx + 1, len(prices)) if prices[i] < A_price]
-            if valid_D_points:
-                D_idx, D_price = valid_D_points[0]
-            else:
-                print(f"DOWNTREND - Skipping pattern: no valid D point below A (${A_price:.2f})")
-                continue
+            # Strict requirement: D must be below A for downtrend
+            if pattern_status == "failed" or D_price < A_price:
+                # Create pattern
+                pattern = {
+                    "direction": "down",
+                    "A": (A_idx, A_price),
+                    "B": (B_idx, B_price),
+                    "C": (C_idx, C_price),
+                    "D": (D_idx, D_price),
+                    "initial_move_pct": move_pct,
+                    "retracement_pct": retracement_pct,
+                    "target_level": target_C_price,
+                    "failure_level": failure_level,
+                    "completion_level": completion_level,
+                    "status": pattern_status
+                }
 
-        # Create pattern
-        pattern = {
-            "direction": "down",
-            "A": (A_idx, A_price),
-            "B": (B_idx, B_price),
-            "C": (C_idx, C_price),
-            "D": (D_idx, D_price),
-            "initial_move_pct": move_pct,
-            "retracement_pct": retracement_pct,
-            "target_level": target_C_price,
-            "failure_level": failure_level,
-            "completion_level": completion_level,
-            "status": pattern_status
-        }
+                patterns.append(pattern)
 
-        patterns.append(pattern)
-
-        print(f"DOWNTREND pattern created:")
-        print(f"  A (absolute high): Index {A_idx}, Price ${A_price:.2f}")
-        print(f"  B (low): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
-        print(f"  C (50% retrace): Index {C_idx}, Price ${C_price:.2f} (retrace: {retracement_pct:.2f}%)")
-        print(f"  D: Index {D_idx}, Price ${D_price:.2f} (status: {pattern_status})")
-        print(f"  Failure level (76.4%): ${failure_level:.2f}")
-        print(f"  Completion level (-23.6%): ${completion_level:.2f}")
-        print()
+                print(f"DOWNTREND pattern created:")
+                print(f"  A (absolute high): Index {A_idx}, Price ${A_price:.2f}")
+                print(f"  B (low): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
+                print(f"  C (50% retrace): Index {C_idx}, Price ${C_price:.2f} (retrace: {retracement_pct:.2f}%)")
+                print(f"  D: Index {D_idx}, Price ${D_price:.2f} (status: {pattern_status})")
+                print(f"  Failure level (76.4%): ${failure_level:.2f}")
+                print(f"  Completion level (-23.6%): ${completion_level:.2f}")
+                print()
 
     return patterns
 
 
-# REPLACE YOUR EXISTING find_significant_price_patterns FUNCTION WITH THIS:
+# Updated main pattern detection function
+def find_significant_price_patterns(prices, dates, min_change_pct=0.005, config=None):
+    """
+    Find significant price patterns with only "failed" or "completed" status.
+    No more "in_progress" patterns.
+
+    UPTREND:
+    1. A is the absolute lowest point in the dataset
+    2. B is the highest point after A that has a valid C point (50% retracement)
+    3. C is the retracement point at exactly 50% (within tolerance)
+    4. D is determined by completion/failure levels - must reach one or the other
+
+    DOWNTREND:
+    1. A is the absolute highest point in the dataset
+    2. B is the lowest point after A that has a valid C point (50% retracement)
+    3. C is the retracement point at exactly 50% (within tolerance)
+    4. D is determined by completion/failure levels - must reach one or the other
+
+    Pattern is "failed" when price breaks 76.4% level after C.
+    Pattern is "completed" when price reaches -23.6% extension level.
+    """
+
+    if config is None:
+        config = {}
+
+    patterns = []
+
+    # UPTREND PATTERN DETECTION
+    print("=== DETECTING UPTREND PATTERNS (Only Failed/Completed) ===")
+    uptrend_patterns = detect_uptrend_patterns(prices, dates, min_change_pct, config)
+    patterns.extend(uptrend_patterns)
+
+    # DOWNTREND PATTERN DETECTION
+    print("=== DETECTING DOWNTREND PATTERNS (Only Failed/Completed) ===")
+    downtrend_patterns = detect_downtrend_patterns(prices, dates, min_change_pct, config)
+    patterns.extend(downtrend_patterns)
+
+    print(
+        f"Total definitive patterns found: {len(patterns)} ({len(uptrend_patterns)} uptrend, {len(downtrend_patterns)} downtrend)")
+    print("All patterns have definitive status: failed or completed")
+    return patterns
 def find_significant_price_patterns(prices, dates, min_change_pct=0.005, config=None):
     """
     Find significant price patterns with specific criteria for both uptrend and downtrend:
@@ -535,10 +547,9 @@ def draw_fibonacci_levels(ax, prices, dates, result, direction, is_failed=False)
 
     return ax
 
-
 def analyze_single_pattern(pattern):
     """
-    Analyze a single Fibonacci pattern.
+    Analyze a single Fibonacci pattern - simplified for failed/completed only.
     """
     direction = pattern["direction"]
     retracement_pct = pattern.get("retracement_pct", 0)
@@ -551,20 +562,21 @@ def analyze_single_pattern(pattern):
     D_price = pattern["D"][1]
 
     if status == "failed":
-        analysis = f"Failed {direction}trend pattern - Retracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
+        analysis = f"FAILED {direction}trend pattern - Price broke 76.4% level"
+        analysis += f"\nRetracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
+        analysis += f"\nPattern failed when price reached ${D_price:.2f}"
     elif status == "completed":
-        analysis = f"Completed {direction}trend pattern - Retracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
-    else:  # in_progress
-        analysis = f"In-progress {direction}trend pattern - Retracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
+        analysis = f"COMPLETED {direction}trend pattern - Price reached -23.6% extension"
+        analysis += f"\nRetracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
+        analysis += f"\nPattern completed when price reached ${D_price:.2f}"
+    else:
+        analysis = f"UNKNOWN pattern status: {status}"
 
     if "failure_level" in pattern:
-        analysis += f"\nFailure level (76.4%): {pattern['failure_level']:.2f}"
+        analysis += f"\nFailure level (76.4%): ${pattern['failure_level']:.2f}"
 
     if "completion_level" in pattern:
-        analysis += f"\nCompletion level (-23.6%): {pattern['completion_level']:.2f}"
-
-    if "target_level" in pattern:
-        analysis += f"\nTarget level (50%): {pattern['target_level']:.2f}"
+        analysis += f"\nCompletion level (-23.6%): ${pattern['completion_level']:.2f}"
 
     return analysis
 
@@ -695,7 +707,7 @@ def analyze_price_data(prices, dates, min_change_threshold=0.005, pattern_config
 
 def display_results(prices, dates, result, analysis, trends):
     """
-    Display the results of the Fibonacci pattern analysis.
+    Display the results of the Fibonacci pattern analysis - updated for failed/completed only.
     """
     # Create and show the diagnostic plot
     fig, ax = plt.subplots(figsize=(16, 10))
@@ -721,30 +733,50 @@ def display_results(prices, dates, result, analysis, trends):
 
     move_type = "Upward" if direction == "up" else "Downward"
     trend_str = ", ".join([f"{k}: {v}" for k, v in trends.items()])
-    ax.set_title(f'Price Series Diagnostic Plot - {move_type} Timeframe Trends: {trend_str})', fontsize=14)
+    ax.set_title(f'Pattern Analysis - {move_type} Move (Only Failed/Completed Patterns)\nTrends: {trend_str}',
+                 fontsize=14)
 
     # Print analysis results
-    print("\nAnalysis Results:")
-    print("-" * 50)
+    print("\nPattern Analysis Results (Failed/Completed Only):")
+    print("-" * 60)
     print(f"Overall trend direction: {trends.get('overall', 'unknown')}")
     print(f"Analysis: {analysis}")
 
     # Draw Fibonacci levels and pattern points
     if result:
         if isinstance(result, list):
-            print(f"Detected {len(result)} different patterns")
+            print(f"Detected {len(result)} definitive patterns")
             colors = [('black', 'red', 'green', 'blue'), ('purple', 'orange', 'cyan', 'magenta')]
 
             for i, pattern in enumerate(result):
                 print(f"\nPattern {i + 1}:")
-                print(f"Detected trend: {pattern['direction']}")
+                print(f"Direction: {pattern['direction']}")
+                print(f"Status: {pattern['status'].upper()}")
                 print(f"Initial move: {pattern['initial_move_pct']:.2f}%")
                 print(f"Retracement: {pattern['retracement_pct']:.2f}%")
-                print(f"Status: {pattern['status']}")
 
                 is_failed = pattern.get('status') == 'failed'
-                marker_size = 150 if is_failed else 100
-                marker_style = 'x' if is_failed else 'o'
+                is_completed = pattern.get('status') == 'completed'
+
+                # Use different styling for failed vs completed
+                if is_failed:
+                    marker_size = 200
+                    marker_style = 'X'  # Large X for failed
+                    line_style = '--'
+                    line_color = 'red'
+                    line_width = 3
+                elif is_completed:
+                    marker_size = 150
+                    marker_style = 'o'  # Circle for completed
+                    line_style = '-'
+                    line_color = 'green'
+                    line_width = 2
+                else:
+                    marker_size = 100
+                    marker_style = 'o'
+                    line_style = '-'
+                    line_color = 'gray'
+                    line_width = 1
 
                 color_set = colors[i % len(colors)]
                 points = {'A': (color_set[0], pattern['A']), 'B': (color_set[1], pattern['B']),
@@ -757,43 +789,72 @@ def display_results(prices, dates, result, analysis, trends):
                         print(f"Warning: Point {label} of pattern {i + 1} has index {idx} outside range.")
                         idx = len(dates) - 1
 
-                    ax.scatter(dates[idx], price, color=color, s=marker_size, zorder=3, marker=marker_style)
+                    # Special styling for D point based on status
+                    if label == 'D':
+                        ax.scatter(dates[idx], price, color=line_color, s=marker_size,
+                                   zorder=3, marker=marker_style, edgecolors='black', linewidth=2)
 
-                    if is_failed and label == 'C':
-                        ax.text(dates[idx], price, f"{label}{i + 1} (FAILED)", fontsize=14, fontweight='bold',
-                                ha='right', va='bottom', color='red')
+                        if is_failed:
+                            ax.text(dates[idx], price, f"{label}{i + 1} (FAILED)", fontsize=14, fontweight='bold',
+                                    ha='right', va='bottom', color='red',
+                                    bbox=dict(boxstyle='round,pad=0.3', facecolor='pink', alpha=0.8))
+                        elif is_completed:
+                            ax.text(dates[idx], price, f"{label}{i + 1} (COMPLETED)", fontsize=14, fontweight='bold',
+                                    ha='right', va='bottom', color='green',
+                                    bbox=dict(boxstyle='round,pad=0.3', facecolor='lightgreen', alpha=0.8))
                     else:
+                        ax.scatter(dates[idx], price, color=color, s=100, zorder=3, marker='o')
                         ax.text(dates[idx], price, f"{label}{i + 1}", fontsize=14, fontweight='bold',
                                 ha='right', va='bottom', color=color)
 
-                    print(f"{label}: Index {idx}, Date {dates[idx].strftime('%Y-%m-%d %H:%M')}, Price {price}")
+                    print(f"{label}: Index {idx}, Date {dates[idx].strftime('%Y-%m-%d %H:%M')}, Price ${price:.2f}")
 
+                # Draw connecting lines with status-based styling
+                points_coords = [(pattern['A'][0], pattern['A'][1]), (pattern['B'][0], pattern['B'][1]),
+                                 (pattern['C'][0], pattern['C'][1]), (pattern['D'][0], pattern['D'][1])]
+                x_points, y_points = zip(*[(dates[idx], price) for idx, price in points_coords if idx < len(dates)])
+                ax.plot(x_points, y_points, color=line_color, linestyle=line_style,
+                        linewidth=line_width, alpha=0.8,
+                        label=f'Pattern {i + 1} ({pattern["status"].upper()})')
+
+                # Draw key levels
                 draw_fibonacci_levels(ax, prices, dates, pattern, pattern['direction'], is_failed=is_failed)
 
-                # Print Fibonacci levels
-                A, B = pattern['A'][1], pattern['B'][1]
-                main_move = B - A if pattern['direction'] == "up" else A - B
-                print(f"\nKey Fibonacci levels for Pattern {i + 1}:")
-                for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, 1.236, 1.618, -0.236, -0.618]:
-                    fib_price = B - (main_move * level) if pattern['direction'] == "up" else B + (main_move * level)
-                    print(f"{level * 100:.1f}%: {fib_price:.2f}")
+                # Print key levels
+                print(f"\nKey levels for Pattern {i + 1}:")
+                print(f"Failure level (76.4%): ${pattern['failure_level']:.2f}")
+                print(f"Completion level (-23.6%): ${pattern['completion_level']:.2f}")
+                print(f"Status: {pattern['status'].upper()}")
 
-                if 'failure_level' in pattern:
-                    print(f"76.4% Failure level: {pattern['failure_level']:.2f}")
-                if 'completion_level' in pattern:
-                    print(f"-23.6% Completion level: {pattern['completion_level']:.2f}")
         else:
+            # Single pattern
             print(f"Detected trend: {result['direction']}")
+            print(f"Status: {result['status'].upper()}")
             print(f"Initial move: {result['initial_move_pct']:.2f}%")
             print(f"Retracement: {result['retracement_pct']:.2f}%")
-            print(f"Status: {result['status']}")
 
             is_failed = result.get('status') == 'failed'
-            marker_size = 150 if is_failed else 100
-            marker_style = 'x' if is_failed else 'o'
+            is_completed = result.get('status') == 'completed'
+
+            # Status-based styling
+            if is_failed:
+                marker_size = 200
+                marker_style = 'X'
+                line_color = 'red'
+                line_style = '--'
+            elif is_completed:
+                marker_size = 150
+                marker_style = 'o'
+                line_color = 'green'
+                line_style = '-'
+            else:
+                marker_size = 100
+                marker_style = 'o'
+                line_color = 'gray'
+                line_style = '-'
 
             points = {'A': ('black', result['A']), 'B': ('red', result['B']),
-                      'C': ('green', result['C']), 'D': ('blue', result['D'])}
+                      'C': ('green', result['C']), 'D': (line_color, result['D'])}
 
             for label, (color, point) in points.items():
                 idx, price = point
@@ -802,32 +863,40 @@ def display_results(prices, dates, result, analysis, trends):
                     print(f"Warning: Point {label} has index {idx} outside range.")
                     idx = len(dates) - 1
 
-                ax.scatter(dates[idx], price, color=color, s=marker_size, zorder=3, marker=marker_style)
+                if label == 'D':
+                    ax.scatter(dates[idx], price, color=line_color, s=marker_size,
+                               zorder=3, marker=marker_style, edgecolors='black', linewidth=2)
 
-                if is_failed and label == 'C':
-                    ax.text(dates[idx], price, f"{label} (FAILED)", fontsize=14, fontweight='bold',
-                            ha='right', va='bottom', color='red')
+                    status_text = "FAILED" if is_failed else "COMPLETED" if is_completed else "UNKNOWN"
+                    text_color = 'red' if is_failed else 'green' if is_completed else 'gray'
+                    bg_color = 'pink' if is_failed else 'lightgreen' if is_completed else 'lightgray'
+
+                    ax.text(dates[idx], price, f"{label} ({status_text})", fontsize=14, fontweight='bold',
+                            ha='right', va='bottom', color=text_color,
+                            bbox=dict(boxstyle='round,pad=0.3', facecolor=bg_color, alpha=0.8))
                 else:
+                    ax.scatter(dates[idx], price, color=color, s=100, zorder=3, marker='o')
                     ax.text(dates[idx], price, label, fontsize=14, fontweight='bold',
                             ha='right', va='bottom', color=color)
 
-                print(f"{label}: Index {idx}, Date {dates[idx].strftime('%Y-%m-%d %H:%M')}, Price {price}")
+                print(f"{label}: Index {idx}, Date {dates[idx].strftime('%Y-%m-%d %H:%M')}, Price ${price:.2f}")
+
+            # Draw connecting line
+            points_coords = [(result['A'][0], result['A'][1]), (result['B'][0], result['B'][1]),
+                             (result['C'][0], result['C'][1]), (result['D'][0], result['D'][1])]
+            x_points, y_points = zip(*[(dates[idx], price) for idx, price in points_coords if idx < len(dates)])
+            ax.plot(x_points, y_points, color=line_color, linestyle=line_style,
+                    linewidth=3, alpha=0.8, label=f'Pattern ({result["status"].upper()})')
 
             draw_fibonacci_levels(ax, prices, dates, result, result['direction'], is_failed=is_failed)
 
-            A, B = result['A'][1], result['B'][1]
-            main_move = B - A if result['direction'] == "up" else A - B
-            print("\nKey Fibonacci levels:")
-            for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, 1.236, 1.618, -0.236, -0.618]:
-                fib_price = B - (main_move * level) if result['direction'] == "up" else B + (main_move * level)
-                print(f"{level * 100:.1f}%: {fib_price:.2f}")
+            print(f"\nKey levels:")
+            print(f"Failure level (76.4%): ${result['failure_level']:.2f}")
+            print(f"Completion level (-23.6%): ${result['completion_level']:.2f}")
+            print(f"Final status: {result['status'].upper()}")
 
-            if 'failure_level' in result:
-                print(f"76.4% Failure level: {result['failure_level']:.2f}")
-            if 'completion_level' in result:
-                print(f"-23.6% Completion level: {result['completion_level']:.2f}")
     else:
-        print("Could not find a valid Fibonacci retracement pattern.")
+        print("No definitive patterns detected (failed or completed).")
         draw_fibonacci_levels(ax, prices, dates, None, direction)
 
     ax.set_xlabel('Date', fontsize=12)
@@ -899,19 +968,16 @@ def analyze_multiple_windows(prices, dates, window_sizes=[50, 100, 200],
 def pattern_significance(pattern):
     """
     Calculate a significance score for a pattern.
-    Higher score = more significant pattern.
+    Prioritize completed and failed patterns since we only have those now.
     """
-    # Prioritize larger initial moves
     if 'initial_move_pct' in pattern:
         score = min(pattern['initial_move_pct'] / 5, 5)  # Cap at 5 for moves >= 25%
 
-        # Add bonus for completed or failed patterns
+        # Add bonus for completed patterns (they reached target)
         if pattern.get('status') == 'completed':
-            score += 3
+            score += 5  # High bonus for completion
         elif pattern.get('status') == 'failed':
-            score += 2  # Failed patterns are also significant
-        elif pattern.get('status') == 'in_progress':
-            score += 1
+            score += 3  # Significant bonus for failure (still important)
 
         # Add bonus for retracement close to 50%
         retrace_pct = pattern.get('retracement_pct', 0)
@@ -920,7 +986,7 @@ def pattern_significance(pattern):
 
         return score
 
-    # Legacy method for backward compatibility
+    # Fallback calculation
     A, B, C, D = pattern['A'][1], pattern['B'][1], pattern['C'][1], pattern['D'][1]
     direction = pattern['direction']
 
@@ -937,30 +1003,23 @@ def pattern_significance(pattern):
     # Calculate retracement ratio
     retracement_ratio = retracement / initial_move if initial_move != 0 else 0
 
-    # Calculate extension ratio
-    extension_ratio = extension / initial_move if initial_move != 0 else 0
-
     # Ideal retracement is around 50%
     retracement_quality = 1.0 - abs(retracement_ratio - 0.5)
 
     # Size of the overall move matters
     move_size = abs(D - A)
 
-    # Check if pattern is failed
-    is_failed = pattern.get('status') == 'failed'
-
-    # Failed patterns are very interesting
-    failed_bonus = 1.0 if is_failed else 0
+    # Bonus for definitive status
+    status_bonus = 2.0 if pattern.get('status') in ['failed', 'completed'] else 0
 
     # Combine factors into a single score
     score = (
             move_size * 0.4 +
             retracement_quality * 0.3 +
-            failed_bonus
+            status_bonus
     )
 
     return score
-
 
 def create_longterm_pattern_figure(prices, dates, all_patterns):
     """
