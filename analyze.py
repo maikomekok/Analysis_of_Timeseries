@@ -62,7 +62,6 @@ def detect_multiple_timeframe_trends(prices, windows=[(5, 10), (20, 50), (50, 20
     return trends
 
 
-# Updated analyze.py - Modified pattern detection functions to only return "failed" or "completed"
 
 def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
     """
@@ -100,7 +99,7 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
         if move_pct < min_change_pct * min_move_multiplier * 100:
             continue
 
-        # Calculate 50% retracement level
+        # Calculate 50% retracement level, but also allow tollerance around 0.2% to make it easier to find valid patterns
         target_C_price = B_price - move_AB * retracement_target
         tolerance_range = move_AB * retracement_tolerance
         min_C_price = target_C_price - tolerance_range
@@ -113,7 +112,7 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
                 C_candidates.append((i, prices[i]))
 
         if C_candidates:
-            # Take the first valid C point (chronologically)
+            # I Take the first valid C point (chronologically)
             C_idx, C_price = C_candidates[0]
             valid_AB_pairs.append((move_AB, B_idx, B_price, C_idx, C_price))
 

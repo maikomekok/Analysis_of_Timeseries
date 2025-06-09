@@ -5,14 +5,13 @@ import json
 from datetime import datetime
 import sys
 
-# Add your existing modules
-sys.path.append('.')  # Adjust path as needed
+sys.path.append('.')
 from analyze import load_and_prepare_data, analyze_multiple_windows, detect_multiple_timeframe_trends
 from data_convertion import process_bitcoin_data
 from data_fetcher import download_btc_raw_data
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend-backend communication
+CORS(app)
 
 DATA_DIR = "C:/Users/admin/Desktop/btc_minute_data"
 RESULTS_DIR = "C:/Users/admin/Desktop/btc_minute_data/results"
@@ -90,8 +89,8 @@ def analyze_bitcoin_data():
         date_str = data.get('date')
         time_str = data.get('time')
         time_window = data.get('timeWindow', params.get('time_window', 30))
+        #I will use min_change paremeter from parameters.json but also allow front-end override
 
-        # Use your min_change parameter, but allow frontend override
         min_change = data.get('minChange', params.get('min_change', 0.003))
 
         if not date_str:
@@ -123,13 +122,11 @@ def analyze_bitcoin_data():
                     {'error': f'Could not obtain data for {date_str}: {raw_result.get("error", "Unknown error")}'}), 404
             data_file = raw_result.get('file')
 
-        # Load and analyze the data using your actual code
         try:
             print(f"Loading data from: {data_file}")
             prices, dates, df = load_and_prepare_data(data_file)
             print(f"Loaded {len(prices)} data points")
 
-            # Filter by time if specified
             if time_str:
                 print(f"Filtering data around time {time_str} with window {time_window} minutes")
                 prices, dates, df = filter_data_by_time(prices, dates, df, time_str, time_window)
@@ -138,7 +135,6 @@ def analyze_bitcoin_data():
             if len(prices) < 10:
                 return jsonify({'error': 'Not enough data points for analysis'}), 400
 
-            # Use YOUR window sizes and parameters from parameters.json
             window_sizes = params.get('window_sizes', [200, 400, 600, 1000])
             overlap_percent = params.get('overlap', 50)
             pattern_config = params.get('pattern_detection', {})
@@ -146,7 +142,6 @@ def analyze_bitcoin_data():
             print(f"Running analysis with window_sizes={window_sizes}, overlap={overlap_percent}%")
             print(f"Pattern config: {pattern_config}")
 
-            # Perform analysis using your existing code with your parameters
             all_patterns = analyze_multiple_windows(
                 prices,
                 dates,
@@ -159,11 +154,9 @@ def analyze_bitcoin_data():
 
             print(f"Found {len(all_patterns)} patterns")
 
-            # Get trends using your code
             trends = detect_multiple_timeframe_trends(prices)
             print(f"Detected trends: {trends}")
 
-            # Format response
             top_patterns_count = params.get('top_patterns', 5)
             response_data = {
                 'success': True,
@@ -209,7 +202,6 @@ def download_and_process_data(date_str, params):
     try:
         print(f"Attempting to download raw data for {date_str}")
 
-        # Use your actual paths
         download_result = download_btc_raw_data(date_str, RAW_DATA_DIR)
 
         if not download_result['success']:
@@ -218,7 +210,6 @@ def download_and_process_data(date_str, params):
 
         print("Download successful, processing data...")
 
-        # Process raw data using your existing code
         result_files = process_bitcoin_data(
             input_dir=RAW_DATA_DIR,
             output_dir=DATA_DIR,
