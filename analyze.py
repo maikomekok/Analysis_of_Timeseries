@@ -674,98 +674,27 @@ def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
     return patterns
 
 
-# Updated main pattern detection function
+
 def find_significant_price_patterns(prices, dates, min_change_pct=0.005, config=None):
-    """
-    Find significant price patterns with only "failed" or "completed" status.
-    No more "in_progress" patterns.
+    print("Finding ALL upward and downward patterns including overlapping ones...")
 
-    UPTREND:
-    1. A is the absolute lowest point in the dataset
-    2. B is the highest point after A that has a valid C point (50% retracement)
-    3. C is the retracement point at exactly 50% (within tolerance)
-    4. D is determined by completion/failure levels - must reach one or the other
+    all_patterns = find_all_overlapping_patterns(prices, dates, min_change_pct, config)
 
-    DOWNTREND:
-    1. A is the absolute highest point in the dataset
-    2. B is the lowest point after A that has a valid C point (50% retracement)
-    3. C is the retracement point at exactly 50% (within tolerance)
-    4. D is determined by completion/failure levels - must reach one or the other
+    print(f"\nFinal Results: {len(all_patterns)} comprehensive patterns detected")
 
-    Pattern is "failed" when price breaks 76.4% level after C.
-    Pattern is "completed" when price reaches -23.6% extension level.
-    """
+    # Print summary
+    up_completed = len([p for p in all_patterns if p['direction'] == 'up' and p['status'] == 'completed'])
+    up_failed = len([p for p in all_patterns if p['direction'] == 'up' and p['status'] == 'failed'])
+    down_completed = len([p for p in all_patterns if p['direction'] == 'down' and p['status'] == 'completed'])
+    down_failed = len([p for p in all_patterns if p['direction'] == 'down' and p['status'] == 'failed'])
 
-    if config is None:
-        config = {}
+    print(f"  UP patterns: {up_completed} completed, {up_failed} failed")
+    print(f"  DOWN patterns: {down_completed} completed, {down_failed} failed")
 
-    patterns = []
+    overlapping = len([p for p in all_patterns if 'overlap_with' in p])
+    print(f"  Overlapping patterns: {overlapping}")
 
-    # UPTREND PATTERN DETECTION
-    print("=== DETECTING UPTREND PATTERNS (Only Failed/Completed) ===")
-    uptrend_patterns = detect_uptrend_patterns(prices, dates, min_change_pct, config)
-    patterns.extend(uptrend_patterns)
-
-    # DOWNTREND PATTERN DETECTION
-    print("=== DETECTING DOWNTREND PATTERNS (Only Failed/Completed) ===")
-    downtrend_patterns = detect_downtrend_patterns(prices, dates, min_change_pct, config)
-    patterns.extend(downtrend_patterns)
-
-    print(
-        f"Total definitive patterns found: {len(patterns)} ({len(uptrend_patterns)} uptrend, {len(downtrend_patterns)} downtrend)")
-    print("All patterns have definitive status: failed or completed")
-    return patterns
-def find_significant_price_patterns(prices, dates, min_change_pct=0.005, config=None):
-    """
-    Find significant price patterns with specific criteria for both uptrend and downtrend:
-
-    UPTREND:
-    1. A is the absolute lowest point in the dataset
-    2. B is the highest point after A that has a valid C point (50% retracement)
-    3. C is the retracement point at exactly 50% (within tolerance)
-    4. D is determined by completion/failure levels
-
-    DOWNTREND:
-    1. A is the absolute highest point in the dataset
-    2. B is the lowest point after A that has a valid C point (50% retracement)
-    3. C is the retracement point at exactly 50% (within tolerance)
-    4. D is determined by completion/failure levels
-
-    Pattern fails when price breaks 76.4% level after C and D cannot reach completion level.
-    """
-
-    if config is None:
-        config = {}
-
-    patterns = []
-
-    # UPTREND PATTERN DETECTION
-    print("=== DETECTING UPTREND PATTERNS ===")
-    uptrend_patterns = detect_uptrend_patterns(prices, dates, min_change_pct, config)
-    patterns.extend(uptrend_patterns)
-
-    # DOWNTREND PATTERN DETECTION
-    print("=== DETECTING DOWNTREND PATTERNS ===")
-    downtrend_patterns = detect_downtrend_patterns(prices, dates, min_change_pct, config)
-    patterns.extend(downtrend_patterns)
-
-    print(
-        f"Total patterns found: {len(patterns)} ({len(uptrend_patterns)} uptrend, {len(downtrend_patterns)} downtrend)")
-    return patterns
-def analyze_move(result):
-    """Legacy function name kept for compatibility"""
-    if result is None:
-        return "No valid pattern found."
-
-    # Handle multiple patterns
-    if isinstance(result, list):
-        analyses = []
-        for i, pattern in enumerate(result):
-            analysis = analyze_single_pattern(pattern)
-            analyses.append(f"Pattern {i + 1} ({pattern['direction']}): {analysis}")
-        return "\n".join(analyses)
-    else:
-        return analyze_single_pattern(result)
+    return all_patterns
 
 
 def draw_fibonacci_levels(ax, prices, dates, result, direction, is_failed=False):
