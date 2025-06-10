@@ -474,27 +474,31 @@ def parse_args():
     """Parse command line arguments with validation"""
     parser = argparse.ArgumentParser(description='Bitcoin Fibonacci Trend Analysis')
     parser.add_argument('date', type=str, help='Date of data to analyze (YYYY-MM-DD format)')
-    parser.add_argument('--time', type=str, help='Specific time to analyze (HH:MM:SS format, optional)')
-    parser.add_argument('--params', type=str, default='parameters.json',
+
+    # Use dest parameter to ensure consistent attribute names
+    parser.add_argument('--time', dest='time', type=str, help='Specific time to analyze (HH:MM:SS format, optional)')
+    parser.add_argument('--params', dest='params', type=str, default='parameters.json',
                         help='Path to JSON file with analysis parameters (default: parameters.json)')
-    parser.add_argument('--time-window', type=int, help='Time window in minutes around specified time')
-    parser.add_argument('--min-change', type=float, help='Minimum price change threshold')
-    parser.add_argument('--window-sizes', type=str, help='Window sizes for analysis (comma-separated)')
-    parser.add_argument('--overlap', type=int, help='Window overlap percentage')
-    parser.add_argument('--top-patterns', type=int, help='Number of top patterns to display')
-    parser.add_argument('--save', action='store_true',
+    parser.add_argument('--time-window', dest='time_window', type=int,
+                        help='Time window in minutes around specified time')
+    parser.add_argument('--min-change', dest='min_change', type=float, help='Minimum price change threshold')
+    parser.add_argument('--window-sizes', dest='window_sizes', type=str,
+                        help='Window sizes for analysis (comma-separated)')
+    parser.add_argument('--overlap', dest='overlap', type=int, help='Window overlap percentage')
+    parser.add_argument('--top-patterns', dest='top_patterns', type=int, help='Number of top patterns to display')
+    parser.add_argument('--save', dest='save', action='store_true',
                         help='Save plots as PNG files instead of displaying them')
-    parser.add_argument('--test', action='store_true',
+    parser.add_argument('--test', dest='test', action='store_true',
                         help='Test the pattern detection method')
 
     # Input/output paths
-    parser.add_argument('--input-dir', type=str, default='C:/Users/admin/Desktop/btc_data',
+    parser.add_argument('--input-dir', dest='input_dir', type=str, default='C:/Users/admin/Desktop/btc_data',
                         help='Input directory for raw data')
-    parser.add_argument('--output-dir', type=str, default='C:/Users/admin/Desktop/btc_minute_data',
+    parser.add_argument('--output-dir', dest='output_dir', type=str, default='C:/Users/admin/Desktop/btc_minute_data',
                         help='Output directory for processed data')
-    parser.add_argument('--temp-dir', type=str, default='C:/Users/admin/Desktop/btc_data',
+    parser.add_argument('--temp-dir', dest='temp_dir', type=str, default='C:/Users/admin/Desktop/btc_data',
                         help='Temporary directory for extraction')
-    parser.add_argument('--results-dir', type=str,
+    parser.add_argument('--results-dir', dest='results_dir', type=str,
                         help='Custom results directory location')
 
     args = parser.parse_args()
@@ -538,7 +542,6 @@ def parse_args():
     args.params_dict = params
 
     return args
-
 
 def check_desktop_minute_data(date_str):
     """Check if processed minute data exists on desktop"""
@@ -597,8 +600,8 @@ def main():
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    # Define expected processed data file path
     data_file = os.path.join(output_dir, f"btc_minute_data_{date_str}.csv")
+
 
     # Check for existing data
     desktop_data_file = check_desktop_minute_data(date_str)

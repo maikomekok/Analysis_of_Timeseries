@@ -1,6 +1,6 @@
 {
     "min_change": 0.005,
-    "window_sizes": [50, 150, 300, 700],
+    "window_sizes": [200, 400, 600, 1000],
     "overlap": 10,
     "top_patterns": 10,
     "time_window": 120,
@@ -10,7 +10,7 @@
         "completion_extension": 0.236,
         "retracement_tolerance": 0.02,
         "use_strict_swing_points": false,
-        "min_move_multiplier": 1,
+        "min_move_multiplier": 1.0,
         "only_show_significant": true,
         "significant_patterns_only": ["completed", "failed"]
     }

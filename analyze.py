@@ -61,9 +61,163 @@ def detect_multiple_timeframe_trends(prices, windows=[(5, 10), (20, 50), (50, 20
 
     return trends
 
+
+def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
+    """
+    FIXED: Detect downtrend patterns with proper swing point detection
+    A (absolute high) → B (actual swing low) → C (50% retrace) → D (below A)
+    """
+    if config is None:
+        config = {}
+
+    retracement_target = config.get("retracement_target", 0.5)
+    retracement_tolerance = config.get("retracement_tolerance", 0.02)
+    completion_extension = config.get("completion_extension", 0.236)
+    failure_level_pct = config.get("failure_level", 0.764)
+    min_move_multiplier = config.get("min_move_multiplier", 2.0)
+
+    patterns = []
+
+    # Step 1: A is ALWAYS the absolute highest point in the entire dataset
+    A_idx = prices.index(max(prices))
+    A_price = max(prices)
+
+    print(f"DOWNTREND - A point (absolute high): Index {A_idx}, Price ${A_price:.2f}")
+
+    # Step 2: Find the ACTUAL LOWEST POINT after A (this should be B)
+    prices_after_A = prices[A_idx + 1:]
+    if len(prices_after_A) < 10:  # Need sufficient data after A
+        print("DOWNTREND - Not enough data after A point")
+        return patterns
+
+    # Find the actual minimum point after A
+    min_price_after_A = min(prices_after_A)
+    min_idx_relative = prices_after_A.index(min_price_after_A)
+    B_idx = A_idx + 1 + min_idx_relative
+    B_price = min_price_after_A
+
+    print(f"DOWNTREND - B point (actual low after A): Index {B_idx}, Price ${B_price:.2f}")
+
+    # Check if A-B move is significant enough
+    move_AB = A_price - B_price
+    move_pct = (move_AB / A_price) * 100
+
+    if move_pct < min_change_pct * min_move_multiplier * 100:
+        print(f"DOWNTREND - A-B move too small: {move_pct:.2f}% < {min_change_pct * min_move_multiplier * 100:.2f}%")
+        return patterns
+
+    # Step 3: Look for 50% retracement (C point) after B
+    target_C_price = B_price + move_AB * retracement_target
+    tolerance_range = move_AB * retracement_tolerance
+    min_C_price = target_C_price - tolerance_range
+    max_C_price = target_C_price + tolerance_range
+
+    print(f"DOWNTREND - Looking for C point between ${min_C_price:.2f} and ${max_C_price:.2f}")
+    print(f"DOWNTREND - Target C price (50% retrace): ${target_C_price:.2f}")
+
+    # Find C points after B
+    C_candidates = []
+    for i in range(B_idx + 1, len(prices)):
+        if min_C_price <= prices[i] <= max_C_price:
+            C_candidates.append((i, prices[i]))
+
+    if not C_candidates:
+        print("DOWNTREND - No valid C point (50% retracement) found")
+        return patterns
+
+    # Take the first valid C point chronologically
+    C_idx, C_price = C_candidates[0]
+
+    print(f"DOWNTREND - C point (50% retrace): Index {C_idx}, Price ${C_price:.2f}")
+
+    # Calculate retracement percentage
+    actual_retracement = C_price - B_price
+    retracement_pct = (actual_retracement / move_AB) * 100
+
+    # Calculate key levels
+    failure_level = B_price + move_AB * failure_level_pct  # 76.4% back up toward A
+    completion_level = B_price - move_AB * completion_extension  # -23.6% extension below B
+
+    # Step 4: Determine D point and pattern status
+    D_idx = len(prices) - 1
+    D_price = prices[D_idx]
+    pattern_status = "in_progress"
+
+    # Analyze price action after C
+    if C_idx + 1 < len(prices):
+        prices_after_C = prices[C_idx + 1:]
+        indices_after_C = list(range(C_idx + 1, len(prices)))
+
+        broke_failure = False
+        reached_completion = False
+
+        for i, price in enumerate(prices_after_C):
+            current_idx = indices_after_C[i]
+
+            # Check if price breaks above failure level (76.4%)
+            if price > failure_level and not reached_completion:
+                broke_failure = True
+                D_idx = current_idx
+                D_price = price
+                pattern_status = "failed"
+                break
+
+            # Check if price reaches completion level (-23.6%)
+            elif price <= completion_level:
+                reached_completion = True
+                D_idx = current_idx
+                D_price = price
+                pattern_status = "completed"
+                break
+
+        # If neither failure nor completion, find the lowest point after C that's below A
+        if pattern_status == "in_progress":
+            points_below_A = [(indices_after_C[i], p) for i, p in enumerate(prices_after_C) if p < A_price]
+            if points_below_A:
+                D_idx, D_price = min(points_below_A, key=lambda x: x[1])
+
+    # Strict requirement: D must be below A
+    if D_price >= A_price:
+        valid_D_points = [(i, prices[i]) for i in range(C_idx + 1, len(prices)) if prices[i] < A_price]
+        if valid_D_points:
+            D_idx, D_price = valid_D_points[0]
+        else:
+            print(f"DOWNTREND - Skipping pattern: no valid D point below A (${A_price:.2f})")
+            return patterns
+
+    # Create pattern
+    pattern = {
+        "direction": "down",
+        "A": (A_idx, A_price),
+        "B": (B_idx, B_price),
+        "C": (C_idx, C_price),
+        "D": (D_idx, D_price),
+        "initial_move_pct": move_pct,
+        "retracement_pct": retracement_pct,
+        "target_level": target_C_price,
+        "failure_level": failure_level,
+        "completion_level": completion_level,
+        "status": pattern_status
+    }
+
+    patterns.append(pattern)
+
+    print(f"DOWNTREND pattern created:")
+    print(f"  A (absolute high): Index {A_idx}, Price ${A_price:.2f}")
+    print(f"  B (actual low): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
+    print(f"  C (50% retrace): Index {C_idx}, Price ${C_price:.2f} (retrace: {retracement_pct:.2f}%)")
+    print(f"  D: Index {D_idx}, Price ${D_price:.2f} (status: {pattern_status})")
+    print(f"  Failure level (76.4%): ${failure_level:.2f}")
+    print(f"  Completion level (-23.6%): ${completion_level:.2f}")
+    print()
+
+    return patterns
+
+
 def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
     """
-    Extract existing uptrend logic with fix: B should be the HIGHEST point after A
+    FIXED: Detect uptrend patterns with proper swing point detection
+    A (absolute low) → B (actual swing high) → C (50% retrace) → D (above A)
     """
     if config is None:
         config = {}
@@ -82,68 +236,59 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
 
     print(f"UPTREND - A point (absolute low): Index {A_idx}, Price ${A_price:.2f}")
 
-    # Step 2: B should be the HIGHEST point after A
-    if A_idx + 1 >= len(prices):
-        print("UPTREND - No data points after A")
-        return patterns
-
+    # Step 2: Find the ACTUAL HIGHEST POINT after A (this should be B)
     prices_after_A = prices[A_idx + 1:]
-    if not prices_after_A:
-        print("UPTREND - No prices after A")
+    if len(prices_after_A) < 10:  # Need sufficient data after A
+        print("UPTREND - Not enough data after A point")
         return patterns
 
-    # Find the highest price after A
+    # Find the actual maximum point after A
     max_price_after_A = max(prices_after_A)
-    B_idx = A_idx + 1 + prices_after_A.index(max_price_after_A)
+    max_idx_relative = prices_after_A.index(max_price_after_A)
+    B_idx = A_idx + 1 + max_idx_relative
     B_price = max_price_after_A
 
-    print(f"UPTREND - B point (highest after A): Index {B_idx}, Price ${B_price:.2f}")
+    print(f"UPTREND - B point (actual high after A): Index {B_idx}, Price ${B_price:.2f}")
 
-    # Check if the A-B move is significant enough
+    # Check if A-B move is significant enough
     move_AB = B_price - A_price
-    if move_AB <= 0:
-        print("UPTREND - No upward move from A to B")
-        return patterns
-
     move_pct = (move_AB / A_price) * 100
+
     if move_pct < min_change_pct * min_move_multiplier * 100:
-        print(f"UPTREND - Move A-B too small: {move_pct:.2f}% < {min_change_pct * min_move_multiplier * 100:.2f}%")
+        print(f"UPTREND - A-B move too small: {move_pct:.2f}% < {min_change_pct * min_move_multiplier * 100:.2f}%")
         return patterns
 
-    print(f"UPTREND - A-B move: {move_pct:.2f}%")
-
-    # Step 3: Look for a valid C point after B (50% retracement)
+    # Step 3: Look for 50% retracement (C point) after B
     target_C_price = B_price - move_AB * retracement_target
     tolerance_range = move_AB * retracement_tolerance
     min_C_price = target_C_price - tolerance_range
     max_C_price = target_C_price + tolerance_range
 
-    print(f"UPTREND - Looking for C between ${min_C_price:.2f} and ${max_C_price:.2f} (target: ${target_C_price:.2f})")
+    print(f"UPTREND - Looking for C point between ${min_C_price:.2f} and ${max_C_price:.2f}")
+    print(f"UPTREND - Target C price (50% retrace): ${target_C_price:.2f}")
 
-    # Look for a valid C point after B
+    # Find C points after B
     C_candidates = []
     for i in range(B_idx + 1, len(prices)):
         if min_C_price <= prices[i] <= max_C_price:
             C_candidates.append((i, prices[i]))
 
     if not C_candidates:
-        print("UPTREND - No valid C point found (50% retracement)")
+        print("UPTREND - No valid C point (50% retracement) found")
         return patterns
 
-    # Take the first valid C point (chronologically)
+    # Take the first valid C point chronologically
     C_idx, C_price = C_candidates[0]
+
     print(f"UPTREND - C point (50% retrace): Index {C_idx}, Price ${C_price:.2f}")
 
-    # Calculate metrics
+    # Calculate retracement percentage
     actual_retracement = B_price - C_price
     retracement_pct = (actual_retracement / move_AB) * 100
 
     # Calculate key levels
     failure_level = B_price - move_AB * failure_level_pct
     completion_level = B_price + move_AB * completion_extension
-
-    print(f"UPTREND - Failure level (76.4%): ${failure_level:.2f}")
-    print(f"UPTREND - Completion level (-23.6%): ${completion_level:.2f}")
 
     # Step 4: Determine D point and pattern status
     D_idx = len(prices) - 1
@@ -155,7 +300,6 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
         prices_after_C = prices[C_idx + 1:]
         indices_after_C = list(range(C_idx + 1, len(prices)))
 
-        # Check each price after C
         broke_failure = False
         reached_completion = False
 
@@ -168,7 +312,6 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
                 D_idx = current_idx
                 D_price = price
                 pattern_status = "failed"
-                print(f"UPTREND - Pattern FAILED at index {D_idx}, price ${D_price:.2f}")
                 break
 
             # Check if price reaches completion level (-23.6%)
@@ -177,7 +320,6 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
                 D_idx = current_idx
                 D_price = price
                 pattern_status = "completed"
-                print(f"UPTREND - Pattern COMPLETED at index {D_idx}, price ${D_price:.2f}")
                 break
 
         # If neither failure nor completion, find the highest point after C that's above A
@@ -185,14 +327,12 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
             points_above_A = [(indices_after_C[i], p) for i, p in enumerate(prices_after_C) if p > A_price]
             if points_above_A:
                 D_idx, D_price = max(points_above_A, key=lambda x: x[1])
-                print(f"UPTREND - Pattern IN-PROGRESS, D at highest point above A: index {D_idx}, price ${D_price:.2f}")
 
     # Strict requirement: D must be above A
     if D_price <= A_price:
         valid_D_points = [(i, prices[i]) for i in range(C_idx + 1, len(prices)) if prices[i] > A_price]
         if valid_D_points:
             D_idx, D_price = valid_D_points[0]
-            print(f"UPTREND - Adjusted D to first point above A: index {D_idx}, price ${D_price:.2f}")
         else:
             print(f"UPTREND - Skipping pattern: no valid D point above A (${A_price:.2f})")
             return patterns
@@ -216,7 +356,7 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
 
     print(f"UPTREND pattern created:")
     print(f"  A (absolute low): Index {A_idx}, Price ${A_price:.2f}")
-    print(f"  B (absolute high after A): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
+    print(f"  B (actual high): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
     print(f"  C (50% retrace): Index {C_idx}, Price ${C_price:.2f} (retrace: {retracement_pct:.2f}%)")
     print(f"  D: Index {D_idx}, Price ${D_price:.2f} (status: {pattern_status})")
     print(f"  Failure level (76.4%): ${failure_level:.2f}")
@@ -224,150 +364,6 @@ def detect_uptrend_patterns(prices, dates, min_change_pct=0.005, config=None):
     print()
 
     return patterns
-def detect_downtrend_patterns(prices, dates, min_change_pct=0.005, config=None):
-    """
-    Detect downtrend patterns: A (absolute high) → B (low) → C (50% retrace) → D (below A)
-    """
-    if config is None:
-        config = {}
-
-    retracement_target = config.get("retracement_target", 0.5)
-    retracement_tolerance = config.get("retracement_tolerance", 0.02)
-    completion_extension = config.get("completion_extension", 0.236)
-    failure_level_pct = config.get("failure_level", 0.764)
-    min_move_multiplier = config.get("min_move_multiplier", 2.0)
-
-    patterns = []
-
-    # Step 1: A is ALWAYS the absolute highest point in the entire dataset
-    A_idx = prices.index(max(prices))
-    A_price = max(prices)
-
-    print(f"DOWNTREND - A point (absolute high): Index {A_idx}, Price ${A_price:.2f}")
-
-
-    valid_AB_pairs = []
-
-    for B_idx in range(A_idx + 1, len(prices)):
-        B_price = prices[B_idx]
-        move_AB = A_price - B_price  # Downward move
-
-        # Skip if move is too small or negative
-        if move_AB <= 0:
-            continue
-
-        move_pct = (move_AB / A_price) * 100
-        if move_pct < min_change_pct * min_move_multiplier * 100:
-            continue
-
-        target_C_price = B_price + move_AB * retracement_target
-        tolerance_range = move_AB * retracement_tolerance
-        min_C_price = target_C_price - tolerance_range
-        max_C_price = target_C_price + tolerance_range
-
-        C_candidates = []
-        for i in range(B_idx + 1, len(prices)):
-            if min_C_price <= prices[i] <= max_C_price:
-                C_candidates.append((i, prices[i]))
-
-        if C_candidates:
-            C_idx, C_price = C_candidates[0]
-            valid_AB_pairs.append((move_AB, B_idx, B_price, C_idx, C_price))
-
-    if not valid_AB_pairs:
-        print("DOWNTREND - No valid A-B-C combinations found")
-        return patterns
-
-    #the best B point (largest move that has valid C)
-    valid_AB_pairs.sort(key=lambda x: x[0], reverse=True)
-
-    # Take the top few candidates
-    for move_AB, B_idx, B_price, C_idx, C_price in valid_AB_pairs[:3]:
-
-        move_pct = (move_AB / A_price) * 100
-        actual_retracement = C_price - B_price
-        retracement_pct = (actual_retracement / move_AB) * 100
-
-        # Calculate key levels
-        failure_level = B_price + move_AB * failure_level_pct  # 76.4% back up toward A
-        completion_level = B_price - move_AB * completion_extension  # -23.6% extension below B
-
-        # Step 4: Determine D point and pattern status
-        D_idx = len(prices) - 1
-        D_price = prices[D_idx]
-        pattern_status = "IP"
-
-        # Analyze price action after C
-        if C_idx + 1 < len(prices):
-            prices_after_C = prices[C_idx + 1:]
-            indices_after_C = list(range(C_idx + 1, len(prices)))
-
-            # Check each price after C
-            broke_failure = False
-            reached_completion = False
-
-            for i, price in enumerate(prices_after_C):
-                current_idx = indices_after_C[i]
-
-                # Check if price breaks above failure level (76.4%)
-                if price > failure_level and not reached_completion:
-                    broke_failure = True
-                    D_idx = current_idx
-                    D_price = price
-                    pattern_status = "failed"
-                    break
-
-                # Check if price reaches completion level (-23.6%)
-                elif price <= completion_level:
-                    reached_completion = True
-                    D_idx = current_idx
-                    D_price = price
-                    pattern_status = "completed"
-                    break
-
-            # If neither failure nor completion, find the lowest point after C that's below A
-            if pattern_status == "in_progress":
-                points_below_A = [(indices_after_C[i], p) for i, p in enumerate(prices_after_C) if p < A_price]
-                if points_below_A:
-                    D_idx, D_price = min(points_below_A, key=lambda x: x[1])
-
-        # Strict requirement: D must be below A
-        if D_price >= A_price:
-            valid_D_points = [(i, prices[i]) for i in range(C_idx + 1, len(prices)) if prices[i] < A_price]
-            if valid_D_points:
-                D_idx, D_price = valid_D_points[0]
-            else:
-                print(f"DOWNTREND - Skipping pattern: no valid D point below A (${A_price:.2f})")
-                continue
-
-        # Create pattern
-        pattern = {
-            "direction": "down",
-            "A": (A_idx, A_price),
-            "B": (B_idx, B_price),
-            "C": (C_idx, C_price),
-            "D": (D_idx, D_price),
-            "initial_move_pct": move_pct,
-            "retracement_pct": retracement_pct,
-            "target_level": target_C_price,
-            "failure_level": failure_level,
-            "completion_level": completion_level,
-            "status": pattern_status
-        }
-
-        patterns.append(pattern)
-
-        print(f"DOWNTREND pattern created:")
-        print(f"  A (absolute high): Index {A_idx}, Price ${A_price:.2f}")
-        print(f"  B (low): Index {B_idx}, Price ${B_price:.2f} (move: {move_pct:.2f}%)")
-        print(f"  C (50% retrace): Index {C_idx}, Price ${C_price:.2f} (retrace: {retracement_pct:.2f}%)")
-        print(f"  D: Index {D_idx}, Price ${D_price:.2f} (status: {pattern_status})")
-        print(f"  Failure level (76.4%): ${failure_level:.2f}")
-        print(f"  Completion level (-23.6%): ${completion_level:.2f}")
-        print()
-
-    return patterns
-
 
 # REPLACE YOUR EXISTING find_significant_price_patterns FUNCTION WITH THIS:
 def find_significant_price_patterns(prices, dates, min_change_pct=0.005, config=None):
