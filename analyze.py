@@ -225,7 +225,7 @@ def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_chang
         valid_B_candidates.sort(key=lambda x: x['B_price'])
 
     # Create patterns from top candidates
-    for i, candidate in enumerate(valid_B_candidates[:3]):  # Top 3 candidates
+    for i, candidate in enumerate(valid_B_candidates[:1]):  # Top 3 candidates
 
         B_idx = candidate['B_idx']
         B_price = candidate['B_price']
