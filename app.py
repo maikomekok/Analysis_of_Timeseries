@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import json
@@ -6,7 +6,8 @@ from datetime import datetime
 import sys
 
 sys.path.append('.')
-from analyze import load_and_prepare_data, analyze_multiple_windows, detect_multiple_timeframe_trends
+from analyze import (load_and_prepare_data, analyze_multiple_windows,
+                     detect_multiple_timeframe_trends, find_significant_price_patterns)
 from data_convertion import process_bitcoin_data
 from data_fetcher import download_btc_raw_data
 
@@ -29,31 +30,29 @@ def load_parameters(params_file='parameters.json'):
             return params
         else:
             print(f"Parameters file {params_file} not found, using defaults")
-            # Default parameters matching your typical setup
-            return {
-                "min_change": 0.003,
-                "window_sizes": [200, 400, 600, 1000],
-                "overlap": 20,
-                "top_patterns": 5,
-                "time_window": 30,
-                "pattern_detection": {
-                    "retracement_target": 0.5,
-                    "failure_level": 0.8,
-                    "completion_extension": 0.236,
-                    "retracement_tolerance": 0.2,
-                    "use_strict_swing_points": True,
-                    "min_move_multiplier": 2.0
-                }
-            }
+            return load_default_params()
     except Exception as e:
         print(f"Error loading parameters: {e}")
-        return {
-            "min_change": 0.003,
-            "window_sizes": [200, 400, 600, 1000],
-            "overlap": 50,
-            "top_patterns": 5,
-            "time_window": 30
+        return load_default_params()
+
+
+def load_default_params():
+    """Load default parameters"""
+    return {
+        "min_change": 0.005,
+        "window_sizes": [100, 300, 600, 1000],
+        "overlap": 10,
+        "top_patterns": 10,
+        "time_window": 120,
+        "pattern_detection": {
+            "retracement_target": 0.5,
+            "retracement_tolerance": 0.02,
+            "completion_extension": 0.236,
+            "failure_level": 0.764,
+            "min_move_multiplier": 2.0,
+            "search_beyond_window_for_failure": True
         }
+    }
 
 
 @app.route('/')
@@ -67,42 +66,39 @@ def index():
         return """
         <h1>Bitcoin Analyzer</h1>
         <p>Please make sure bitcoin_analyzer.html is in the same directory as app.py</p>
-        <p>Files needed:</p>
-        <ul>
-            <li>app.py (this file)</li>
-            <li>bitcoin_analyzer.html</li>
-            <li>parameters.json (your config)</li>
-            <li>analyze.py (your analysis code)</li>
-        </ul>
         """
 
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_bitcoin_data():
-    """Main API endpoint for Bitcoin analysis using your parameters"""
+    """Main API endpoint for Bitcoin analysis"""
     try:
-        # Load your parameters
+        # Load parameters from parameters.json
         params = load_parameters()
 
         # Get request data
         data = request.json
         date_str = data.get('date')
         time_str = data.get('time')
-        time_window = data.get('timeWindow', params.get('time_window', 30))
-        #I will use min_change paremeter from parameters.json but also allow front-end override
+        time_window = data.get('timeWindow', params.get('time_window', 120))
 
-        min_change = data.get('minChange', params.get('min_change', 0.003))
+        # Allow frontend to override min_change
+        min_change = data.get('minChange', params.get('min_change', 0.005))
 
         if not date_str:
             return jsonify({'error': 'Date is required'}), 400
 
-        print(
-            f"Analyzing data for {date_str} with parameters: min_change={min_change}, window_sizes={params.get('window_sizes')}")
+        print(f"=== BITCOIN ANALYSIS REQUEST ===")
+        print(f"Date: {date_str}")
+        print(f"Time: {time_str}")
+        print(f"Min Change: {min_change}")
+        print(f"Window sizes: {params.get('window_sizes')}")
+        print("=" * 40)
 
-        # Check if processed data exists (try multiple possible locations)
+        # Check if processed data exists
         possible_files = [
             os.path.join(DATA_DIR, f"btc_minute_data_{date_str}.csv"),
-            f"btc_minute_data_{date_str}.csv",  # Current directory
+            f"btc_minute_data_{date_str}.csv",
             os.path.join(".", f"btc_minute_data_{date_str}.csv")
         ]
 
@@ -114,33 +110,35 @@ def analyze_bitcoin_data():
                 break
 
         if not data_file:
-            print(f"No processed data found for {date_str}, attempting to download and process...")
-            # Try to download and process data
-            raw_result = download_and_process_data(date_str, params)
-            if not raw_result['success']:
-                return jsonify(
-                    {'error': f'Could not obtain data for {date_str}: {raw_result.get("error", "Unknown error")}'}), 404
-            data_file = raw_result.get('file')
+            print(f"No processed data found for {date_str}")
+            return jsonify({'error': f'No data file found for {date_str}'}), 404
 
         try:
             print(f"Loading data from: {data_file}")
             prices, dates, df = load_and_prepare_data(data_file)
             print(f"Loaded {len(prices)} data points")
 
+            # Filter by time if specified
             if time_str:
-                print(f"Filtering data around time {time_str} with window {time_window} minutes")
+                print(f"Filtering data around time {time_str}")
                 prices, dates, df = filter_data_by_time(prices, dates, df, time_str, time_window)
                 print(f"Filtered to {len(prices)} data points")
 
             if len(prices) < 10:
                 return jsonify({'error': 'Not enough data points for analysis'}), 400
 
-            window_sizes = params.get('window_sizes', [200, 400, 600, 1000])
-            overlap_percent = params.get('overlap', 50)
+            # Extract parameters exactly like main.py does
+            window_sizes = params.get('window_sizes', [100, 300, 600, 1000])
+            overlap_percent = params.get('overlap', 10)
             pattern_config = params.get('pattern_detection', {})
+            top_patterns_count = params.get('top_patterns', 10)
 
-            print(f"Running analysis with window_sizes={window_sizes}, overlap={overlap_percent}%")
-            print(f"Pattern config: {pattern_config}")
+            print(f"Running analysis exactly like main.py:")
+            print(f"  Window sizes: {window_sizes}")
+            print(f"  Overlap: {overlap_percent}%")
+            print(f"  Min change: {min_change}")
+            print(f"  Pattern config: {pattern_config}")
+
             all_patterns = analyze_multiple_windows(
                 prices,
                 dates,
@@ -152,13 +150,13 @@ def analyze_bitcoin_data():
                 pattern_config=pattern_config
             )
 
+            print(f"Found {len(all_patterns)} patterns using analyze_multiple_windows")
 
-            print(f"Found {len(all_patterns)} patterns")
-
+            # Detect trends
             trends = detect_multiple_timeframe_trends(prices)
             print(f"Detected trends: {trends}")
 
-            top_patterns_count = params.get('top_patterns', 5)
+            # Format response
             response_data = {
                 'success': True,
                 'date': date_str,
@@ -176,9 +174,11 @@ def analyze_bitcoin_data():
                 'timestamps': [d.isoformat() if hasattr(d, 'isoformat') else str(d) for d in dates],
                 'parameters_used': {
                     'min_change': min_change,
-                    'window_sizes': window_sizes,
-                    'overlap': overlap_percent,
                     'pattern_config': pattern_config
+                },
+                'analysis_summary': {
+                    'total_patterns_found': len(all_patterns),
+                    'patterns_returned': len(all_patterns[:top_patterns_count])
                 }
             }
 
@@ -198,65 +198,27 @@ def analyze_bitcoin_data():
         return jsonify({'error': f'Request processing failed: {str(e)}'}), 500
 
 
-def download_and_process_data(date_str, params):
-    """Download and process raw data if needed using your existing code"""
-    try:
-        print(f"Attempting to download raw data for {date_str}")
-
-        download_result = download_btc_raw_data(date_str, RAW_DATA_DIR)
-
-        if not download_result['success']:
-            print(f"Download failed: {download_result}")
-            return {'success': False, 'error': 'Download failed'}
-
-        print("Download successful, processing data...")
-
-        result_files = process_bitcoin_data(
-            input_dir=RAW_DATA_DIR,
-            output_dir=DATA_DIR,
-            temp_dir=TEMP_DIR,
-            interval_minutes=1,
-            cleanup=True
-        )
-
-        print(f"Processing result: {result_files}")
-
-        if date_str in result_files:
-            return {'success': True, 'file': result_files[date_str]}
-        else:
-            return {'success': False, 'error': 'Processing failed - no output file generated'}
-
-    except Exception as e:
-        print(f"Download/process error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return {'success': False, 'error': str(e)}
-
-
 def filter_data_by_time(prices, dates, df, time_str, time_window_minutes):
     """Filter data by specific time window"""
     from datetime import datetime, time
 
     try:
-        # Parse target time (handle both HH:MM and HH:MM:SS formats)
+        # Parse target time
         if len(time_str.split(':')) == 2:
             target_time = datetime.strptime(time_str, '%H:%M').time()
         else:
             target_time = datetime.strptime(time_str, '%H:%M:%S').time()
 
-        # Convert timestamps to time objects if needed
+        # Convert timestamps to time objects
         if isinstance(dates[0], str):
-            # Handle different string formats
             time_objects = []
             for d in dates:
                 try:
                     if ':' in d and len(d.split(':')) >= 2:
                         time_objects.append(datetime.strptime(d, '%H:%M:%S').time())
                     else:
-                        # Fallback parsing
                         time_objects.append(datetime.strptime(d, '%H:%M').time())
                 except:
-                    # If parsing fails, skip this entry
                     continue
         else:
             time_objects = [d.time() if hasattr(d, 'time') else d for d in dates]
@@ -269,7 +231,7 @@ def filter_data_by_time(prices, dates, df, time_str, time_window_minutes):
             if hasattr(time_obj, 'hour'):
                 time_minutes = time_obj.hour * 60 + time_obj.minute
                 diff_minutes = min(abs(time_minutes - target_minutes),
-                                   1440 - abs(time_minutes - target_minutes))  # Handle midnight wrap
+                                   1440 - abs(time_minutes - target_minutes))
 
                 if diff_minutes <= time_window_minutes:
                     valid_indices.append(i)
@@ -288,8 +250,11 @@ def filter_data_by_time(prices, dates, df, time_str, time_window_minutes):
 
 
 def format_patterns_for_frontend(all_patterns):
-    """Format pattern data for frontend consumption"""
+    """Format pattern data for frontend consumption - simple coordinate handling"""
     formatted_patterns = []
+    seen_patterns = set()
+
+    print(f"Formatting {len(all_patterns)} patterns for frontend...")
 
     for pattern_data in all_patterns:
         result, analysis, window_info = pattern_data
@@ -298,37 +263,79 @@ def format_patterns_for_frontend(all_patterns):
         patterns_to_process = [result] if not isinstance(result, list) else result
 
         for pattern in patterns_to_process:
-            # Extract window start index for proper coordinate conversion
+            # Create signature to avoid duplicates
+            pattern_signature = (
+                pattern.get('A', [0, 0])[0],
+                pattern.get('B', [0, 0])[0],
+                pattern.get('C', [0, 0])[0],
+                pattern.get('D', [0, 0])[0],
+                pattern.get('direction')
+            )
+
+            if pattern_signature in seen_patterns:
+                continue
+            seen_patterns.add(pattern_signature)
+
+            # Handle coordinate conversion for window-based patterns
             window_start_idx = window_info.get('start_idx', 0)
+
+            def convert_point_coordinate(point, window_start):
+                """Convert window-local coordinates to global coordinates"""
+                if isinstance(point, (list, tuple)) and len(point) >= 2:
+                    local_index, price = point[0], point[1]
+
+                    # If this is a window-based pattern (start_idx > 0), convert coordinates
+                    if window_start > 0:
+                        global_index = window_start + local_index
+                        print(
+                            f"  Converting: local {local_index} + window_start {window_start} = global {global_index}")
+                    else:
+                        # Comprehensive pattern - coordinates are already global
+                        global_index = local_index
+
+                    return [global_index, price]
+                return point
+
+            # Convert all pattern coordinates
+            converted_A = convert_point_coordinate(pattern.get('A', [0, 0]), window_start_idx)
+            converted_B = convert_point_coordinate(pattern.get('B', [0, 0]), window_start_idx)
+            converted_C = convert_point_coordinate(pattern.get('C', [0, 0]), window_start_idx)
+            converted_D = convert_point_coordinate(pattern.get('D', [0, 0]), window_start_idx)
 
             formatted_pattern = {
                 'direction': pattern.get('direction', 'unknown'),
                 'status': pattern.get('status', 'unknown'),
-                'A': pattern.get('A', [0, 0]),
-                'B': pattern.get('B', [0, 0]),
-                'C': pattern.get('C', [0, 0]),
-                'D': pattern.get('D', [0, 0]),
+                'A': converted_A,
+                'B': converted_B,
+                'C': converted_C,
+                'D': converted_D,
                 'initial_move_pct': pattern.get('initial_move_pct', 0),
                 'retracement_pct': pattern.get('retracement_pct', 0),
-                'fifty_pct_level': pattern.get('fifty_pct_level'),
                 'failure_level': pattern.get('failure_level'),
                 'completion_level': pattern.get('completion_level'),
                 'target_level': pattern.get('target_level'),
-                'long_term': pattern.get('long_term', False),
                 'pattern_type': pattern.get('pattern_type', 'Fibonacci'),
+                'analysis': analysis,
+                'accurate_failure_point': pattern.get('accurate_failure_point', False),
                 'window_info': {
                     'window_size': window_info.get('window_size', 0),
-                    'start_date': window_info.get('start_date').isoformat() if window_info.get(
-                        'start_date') and hasattr(window_info.get('start_date'), 'isoformat') else str(
-                        window_info.get('start_date', '')),
-                    'end_date': window_info.get('end_date').isoformat() if window_info.get('end_date') and hasattr(
-                        window_info.get('end_date'), 'isoformat') else str(window_info.get('end_date', '')),
                     'start_idx': window_start_idx
                 }
             }
+
+            print(f"Formatted pattern: {pattern['direction']} {pattern['status']}")
+            print(f"  A: {converted_A}, B: {converted_B}, C: {converted_C}, D: {converted_D}")
+            if pattern.get('accurate_failure_point'):
+                print(f"  ✓ Accurate failure point found")
+
             formatted_patterns.append(formatted_pattern)
 
-    return formatted_patterns
+    # Sort by quality and limit
+    formatted_patterns.sort(key=lambda p: p.get('initial_move_pct', 0), reverse=True)
+    final_patterns = formatted_patterns[:10]  # Return top 10 like main.py
+
+    print(f"Returning {len(final_patterns)} formatted patterns")
+    return final_patterns
 
 
 @app.route('/api/available-dates', methods=['GET'])
@@ -343,7 +350,6 @@ def get_available_dates():
                 if filename.startswith('btc_minute_data_') and filename.endswith('.csv'):
                     date_str = filename.replace('btc_minute_data_', '').replace('.csv', '')
                     try:
-                        # Validate date format
                         datetime.strptime(date_str, '%Y-%m-%d')
                         available_dates.append(date_str)
                     except ValueError:
@@ -354,15 +360,13 @@ def get_available_dates():
             if filename.startswith('btc_minute_data_') and filename.endswith('.csv'):
                 date_str = filename.replace('btc_minute_data_', '').replace('.csv', '')
                 try:
-                    # Validate date format
                     datetime.strptime(date_str, '%Y-%m-%d')
                     if date_str not in available_dates:
                         available_dates.append(date_str)
                 except ValueError:
                     continue
 
-        available_dates.sort(reverse=True)  # Most recent first
-        print(f"Available dates: {available_dates}")
+        available_dates.sort(reverse=True)
         return jsonify({'dates': available_dates})
 
     except Exception as e:
@@ -377,6 +381,20 @@ def get_parameters():
     return jsonify(params)
 
 
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    params = load_parameters()
+    return jsonify({
+        'status': 'healthy',
+        'data_dir_exists': os.path.exists(DATA_DIR),
+        'parameters_loaded': bool(params),
+        'min_change': params.get('min_change'),
+        'window_sizes': params.get('window_sizes'),
+        'only_completed_failed': True
+    })
+
+
 if __name__ == '__main__':
     # Make sure required directories exist
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -386,14 +404,15 @@ if __name__ == '__main__':
     # Load and display parameters
     params = load_parameters()
 
-    print(f"Starting Bitcoin Analyzer Web Server...")
+    print(f"=== BITCOIN ANALYZER WEB SERVER ===")
     print(f"Data directory: {DATA_DIR}")
-    print(f"Results directory: {RESULTS_DIR}")
-    print(f"Raw data directory: {RAW_DATA_DIR}")
-    print(f"Parameters loaded: {params}")
-    print(f"Window sizes: {params.get('window_sizes', 'Not found')}")
-    print(f"Min change threshold: {params.get('min_change', 'Not found')}")
+    print(f"Parameters loaded:")
+    print(f"  Min change: {params.get('min_change')}")
+    print(f"  Window sizes: {params.get('window_sizes')}")
+    print(f"  Top patterns: {params.get('top_patterns')}")
+    print(f"  Only completed/failed patterns: YES")
     print(f"Open your browser to: http://localhost:5000")
+    print("=" * 40)
 
     # Run the Flask app
     app.run(debug=True, host='0.0.0.0', port=5000)

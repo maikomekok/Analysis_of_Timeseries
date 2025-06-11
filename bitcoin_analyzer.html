@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pattern Analyzer</title>
+    <title>Bitcoin Pattern Analyzer</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <style>
         * {
@@ -37,18 +37,12 @@
             text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         }
 
-        .header p {
-            font-size: 1.2em;
-            opacity: 0.9;
-        }
-
         .controls-panel {
             background: rgba(255, 255, 255, 0.95);
             padding: 25px;
             border-radius: 15px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             margin-bottom: 30px;
-            backdrop-filter: blur(10px);
         }
 
         .form-row {
@@ -71,19 +65,17 @@
             color: #555;
         }
 
-        .form-group input, .form-group select {
+        .form-group input {
             width: 100%;
             padding: 12px;
             border: 2px solid #ddd;
             border-radius: 8px;
             font-size: 16px;
-            transition: border-color 0.3s ease;
         }
 
-        .form-group input:focus, .form-group select:focus {
+        .form-group input:focus {
             outline: none;
             border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
 
         .btn {
@@ -96,19 +88,16 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
         }
 
         .btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
         }
 
         .btn:disabled {
             background: #ccc;
             cursor: not-allowed;
             transform: none;
-            box-shadow: none;
         }
 
         .results-section {
@@ -117,7 +106,6 @@
             padding: 25px;
             border-radius: 15px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            backdrop-filter: blur(10px);
         }
 
         .results-header {
@@ -157,7 +145,6 @@
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
-            margin-top: 20px;
         }
 
         .pattern-card {
@@ -166,11 +153,6 @@
             padding: 20px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
             border-left: 4px solid #667eea;
-            transition: transform 0.3s ease;
-        }
-
-        .pattern-card:hover {
-            transform: translateY(-2px);
         }
 
         .pattern-header {
@@ -196,8 +178,6 @@
 
         .status-completed { background: #d4edda; color: #155724; }
         .status-failed { background: #f8d7da; color: #721c24; }
-        .status-in-progress { background: #fff3cd; color: #856404; }
-        .status-progressive { background: #cce5ff; color: #004085; }
 
         .pattern-details {
             margin-top: 10px;
@@ -226,45 +206,12 @@
             color: #666;
         }
 
-        .loading::after {
-            content: '';
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-left: 10px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
         .error-message {
             background: #f8d7da;
             color: #721c24;
             padding: 15px;
             border-radius: 8px;
             margin: 20px 0;
-            border: 1px solid #f5c6cb;
-        }
-
-        .info-panel {
-            background: linear-gradient(135deg, #f8f9ff 0%, #e8f2ff 100%);
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            border: 1px solid #e0e8f0;
-        }
-
-        .info-title {
-            font-size: 1.1em;
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 10px;
         }
 
         .backend-status {
@@ -278,35 +225,19 @@
         .backend-connected {
             background: #d4edda;
             color: #155724;
-            border: 1px solid #c3e6cb;
         }
 
         .backend-simulation {
             background: #fff3cd;
             color: #856404;
-            border: 1px solid #ffeaa7;
-        }
-
-        @media (max-width: 768px) {
-            .form-row {
-                flex-direction: column;
-            }
-
-            .patterns-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .header h1 {
-                font-size: 2em;
-            }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Pattern Analyzer</h1>
-            <p>A-B-C-D Pattern Detection</p>
+            <h1>Bitcoin Pattern Analyzer</h1>
+            <p>A-B-C-D Fibonacci Pattern Detection</p>
         </div>
 
         <div class="controls-panel">
@@ -323,15 +254,20 @@
                 </div>
                 <div class="form-group">
                     <label for="timeWindow">Time Window (Minutes)</label>
-                    <input type="number" id="timeWindow" value="30" min="5" max="120">
+                    <input type="number" id="timeWindow" value="120" min="5" max="240">
                 </div>
                 <div class="form-group">
                     <label for="minChange">Min Change (%)</label>
-                    <input type="number" id="minChange" value="0.3" min="0.1" max="5" step="0.1">
+                    <input type="number" id="minChange" value="0.5" min="0.1" max="5" step="0.1">
                 </div>
                 <div class="form-group">
                     <button class="btn" onclick="analyzeData()" id="analyzeBtn">
-                        🔍 Analyze Patterns
+                        Analyze Patterns
+                    </button>
+                </div>
+                <div class="form-group">
+                    <button class="btn" onclick="debugAnalysis()" id="debugBtn" style="background: linear-gradient(45deg, #f39c12, #e67e22);">
+                        Debug Analysis
                     </button>
                 </div>
             </div>
@@ -341,11 +277,6 @@
             <div class="results-header">
                 <div class="results-title">Analysis Results</div>
                 <div class="pattern-count" id="patternCount">0 Patterns Found</div>
-            </div>
-
-            <div class="info-panel" id="infoPanel" style="display: none;">
-                <div class="info-title">Market Overview</div>
-                <div id="marketInfo"></div>
             </div>
 
             <div class="chart-container">
@@ -358,31 +289,155 @@
     </div>
 
     <script>
-        console.log('JavaScript loading...');
-
         let priceChart = null;
         let currentData = null;
         let backendConnected = false;
 
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM loaded, initializing...');
-
-            // Set default date
+            console.log('Bitcoin Analyzer loading...');
             document.getElementById('dateInput').valueAsDate = new Date();
-
-            // Check backend status
             checkBackendStatus();
         });
 
+        async function debugAnalysis() {
+            const dateInput = document.getElementById('dateInput').value;
+            const minChange = parseFloat(document.getElementById('minChange').value) / 100;
+
+            if (!dateInput) {
+                alert('Please select a date first');
+                return;
+            }
+
+            const debugBtn = document.getElementById('debugBtn');
+            debugBtn.disabled = true;
+            debugBtn.innerHTML = 'Debugging...';
+
+            try {
+                const response = await fetch('/api/debug', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        date: dateInput,
+                        minChange: minChange
+                    })
+                });
+
+                if (response.ok) {
+                    const debugData = await response.json();
+                    console.log('Debug data:', debugData);
+                    showDebugResults(debugData);
+                } else {
+                    const errorData = await response.json();
+                    alert('Debug failed: ' + errorData.error);
+                }
+            } catch (error) {
+                console.error('Debug request failed:', error);
+                alert('Debug failed: ' + error.message);
+            } finally {
+                debugBtn.disabled = false;
+                debugBtn.innerHTML = 'Debug Analysis';
+            }
+        }
+
+        function showDebugResults(debugData) {
+            const resultsSection = document.getElementById('resultsSection');
+            resultsSection.style.display = 'block';
+
+            let debugHtml = `
+                <div class="results-header">
+                    <div class="results-title">🔍 Debug Results</div>
+                    <div class="pattern-count">Analysis Methods Tested</div>
+                </div>
+                <div class="patterns-grid">
+                    <div class="pattern-card">
+                        <div class="pattern-header">
+                            <div class="pattern-title">Data Loading</div>
+                            <div class="pattern-status status-completed">✅ SUCCESS</div>
+                        </div>
+                        <div class="pattern-details">
+                            <div class="detail-row">
+                                <span class="detail-label">Data Points:</span>
+                                <span class="detail-value">${debugData.data_points.toLocaleString()}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Price Range:</span>
+                                <span class="detail-value">${debugData.price_range.min.toFixed(2)} - ${debugData.price_range.max.toFixed(2)}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Min Change Used:</span>
+                                <span class="detail-value">${(debugData.min_change_used * 100).toFixed(1)}%</span>
+                            </div>
+                        </div>
+                    </div>
+            `;
+
+            // Show results for each method tested
+            Object.entries(debugData.methods_tested).forEach(([method, result]) => {
+                const statusClass = result.success ? 'status-completed' : 'status-failed';
+                const statusIcon = result.success ? '✅' : '❌';
+
+                debugHtml += `
+                    <div class="pattern-card">
+                        <div class="pattern-header">
+                            <div class="pattern-title">${method}</div>
+                            <div class="pattern-status ${statusClass}">${statusIcon} ${result.success ? 'SUCCESS' : 'FAILED'}</div>
+                        </div>
+                        <div class="pattern-details">
+                `;
+
+                if (result.success) {
+                    debugHtml += `
+                        <div class="detail-row">
+                            <span class="detail-label">Patterns Found:</span>
+                            <span class="detail-value">${result.patterns_found}</span>
+                        </div>
+                    `;
+
+                    if (result.window_sizes) {
+                        debugHtml += `
+                            <div class="detail-row">
+                                <span class="detail-label">Window Sizes:</span>
+                                <span class="detail-value">[${result.window_sizes.join(', ')}]</span>
+                            </div>
+                        `;
+                    }
+
+                    if (result.sample_pattern) {
+                        debugHtml += `
+                            <div class="detail-row">
+                                <span class="detail-label">Sample Pattern:</span>
+                                <span class="detail-value">${result.sample_pattern.direction} ${result.sample_pattern.status}</span>
+                            </div>
+                        `;
+                    }
+                } else {
+                    debugHtml += `
+                        <div class="detail-row">
+                            <span class="detail-label">Error:</span>
+                            <span class="detail-value" style="color: red;">${result.error}</span>
+                        </div>
+                    `;
+                }
+
+                debugHtml += `
+                        </div>
+                    </div>
+                `;
+            });
+
+            debugHtml += '</div>';
+            resultsSection.innerHTML = debugHtml;
+        }
+
         function analyzeData() {
-            console.log('analyzeData() called');
+            console.log('Starting analysis...');
 
             const dateInput = document.getElementById('dateInput').value;
             const timeInput = document.getElementById('timeInput').value;
             const timeWindow = parseInt(document.getElementById('timeWindow').value);
             const minChange = parseFloat(document.getElementById('minChange').value) / 100;
-
-            console.log('Form values:', {dateInput, timeInput, timeWindow, minChange});
 
             if (!dateInput) {
                 alert('Please select a date');
@@ -392,12 +447,13 @@
             const analyzeBtn = document.getElementById('analyzeBtn');
             const resultsSection = document.getElementById('resultsSection');
 
-            // Show loading state
+            // Show loading
             analyzeBtn.disabled = true;
             analyzeBtn.innerHTML = 'Analyzing...';
             resultsSection.style.display = 'block';
+            resultsSection.innerHTML = '<div class="loading">Analyzing Bitcoin patterns...</div>';
 
-            // Call analysis function
+            // Perform analysis
             performAnalysis(dateInput, timeInput, timeWindow, minChange)
                 .then(function(data) {
                     console.log('Analysis complete:', data);
@@ -409,29 +465,23 @@
                 })
                 .finally(function() {
                     analyzeBtn.disabled = false;
-                    analyzeBtn.innerHTML = '🔍 Analyze Patterns';
+                    analyzeBtn.innerHTML = 'Analyze Patterns';
                 });
         }
 
         async function checkBackendStatus() {
-            console.log('Checking backend status...');
-
             try {
                 const response = await fetch('/api/parameters');
                 if (response.ok) {
                     const params = await response.json();
-                    console.log('Backend parameters:', params);
-
                     backendConnected = true;
-                    showBackendStatus('connected', 'Backend Connected - Min Change: ' + params.min_change + ', Windows: [' + params.window_sizes.join(', ') + ']');
+                    showBackendStatus('connected', 'Backend Connected');
                     document.getElementById('minChange').value = (params.min_change * 100).toFixed(1);
                 } else {
-                    console.log('Backend not responding');
-                    showBackendStatus('simulation', 'Backend not available - Using simulation');
+                    showBackendStatus('simulation', 'Backend not available');
                 }
             } catch (error) {
-                console.log('Backend connection failed:', error);
-                showBackendStatus('simulation', 'Backend not available - Using simulation');
+                showBackendStatus('simulation', 'Backend not available');
             }
         }
 
@@ -443,9 +493,6 @@
         }
 
         async function performAnalysis(date, time, timeWindow, minChange) {
-            console.log('Performing analysis for:', {date, time, timeWindow, minChange});
-
-            // Try backend first
             try {
                 const response = await fetch('/api/analyze', {
                     method: 'POST',
@@ -462,109 +509,48 @@
 
                 if (response.ok) {
                     const data = await response.json();
-                    console.log('Backend response:', data);
-                    showBackendStatus('connected', 'Backend Connected - Using real data');
-
                     return {
                         prices: data.prices,
                         timestamps: data.timestamps.map(ts => new Date(ts)),
                         patterns: data.patterns,
                         originalDate: data.date,
                         originalTime: data.time,
+                        dataPoints: data.dataPoints,
+                        priceRange: data.priceRange,
                         isRealData: true
                     };
                 } else {
                     const errorData = await response.json();
-                    console.log('Backend error:', errorData);
-                    showBackendStatus('simulation', 'Backend error: ' + errorData.error);
+                    throw new Error(errorData.error || 'Analysis failed');
                 }
             } catch (error) {
-                console.log('Backend request failed:', error);
-                showBackendStatus('simulation', 'Backend not available');
+                throw error;
             }
-
-            // Fallback to simulation
-            console.log('Using simulation data');
-            return generateSimulationData(date, time, timeWindow, minChange);
-        }
-
-        function generateSimulationData(date, time, timeWindow, minChange) {
-            console.log('Generating simulation data');
-
-            const basePrice = 67000 + Math.random() * 4000;
-            const dataPoints = time ? timeWindow * 2 : 1440;
-            const prices = [];
-            const timestamps = [];
-
-            let currentPrice = basePrice;
-            const startDate = new Date(date + 'T00:00:00');
-
-            for (let i = 0; i < dataPoints; i++) {
-                const timestamp = new Date(startDate.getTime() + i * 60000);
-                const change = (Math.random() - 0.5) * 0.004; // ±0.2% per minute
-                currentPrice = currentPrice * (1 + change);
-
-                prices.push(currentPrice);
-                timestamps.push(timestamp);
-            }
-
-            // Generate simple patterns
-            const patterns = [];
-            if (prices.length > 100) {
-                const quarter = Math.floor(prices.length / 4);
-
-                patterns.push({
-                    direction: 'up',
-                    status: 'completed',
-                    A: [quarter, prices[quarter]],
-                    B: [quarter * 2, prices[quarter * 2]],
-                    C: [quarter * 3, prices[quarter * 3]],
-                    D: [quarter * 4 - 1, prices[quarter * 4 - 1]],
-                    initial_move_pct: Math.abs((prices[quarter * 2] - prices[quarter]) / prices[quarter] * 100),
-                    retracement_pct: Math.abs((prices[quarter * 3] - prices[quarter * 2]) / (prices[quarter * 2] - prices[quarter]) * 100)
-                });
-            }
-
-            return {
-                prices: prices,
-                timestamps: timestamps,
-                patterns: patterns,
-                originalDate: date,
-                originalTime: time,
-                isRealData: false
-            };
         }
 
         function displayResults(data) {
             console.log('Displaying results:', data);
-
             currentData = data;
 
-            document.getElementById('patternCount').textContent = data.patterns.length + ' Patterns Found';
-
-            const infoPanel = document.getElementById('infoPanel');
-            const marketInfo = document.getElementById('marketInfo');
-            infoPanel.style.display = 'block';
-
-            const minPrice = Math.min(...data.prices);
-            const maxPrice = Math.max(...data.prices);
-            const priceRange = ((maxPrice - minPrice) / minPrice * 100).toFixed(2);
-
-            marketInfo.innerHTML =
-                '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">' +
-                '<div><strong>Date:</strong> ' + data.originalDate + '</div>' +
-                '<div><strong>Time:</strong> ' + (data.originalTime || 'Full Day') + '</div>' +
-                '<div><strong>Price Range:</strong> ' + priceRange + '%</div>' +
-                '<div><strong>Data Points:</strong> ' + data.prices.length + '</div>' +
-                '<div><strong>Source:</strong> ' + (data.isRealData ? 'Real Data' : 'Simulation') + '</div>' +
-                '</div>';
+            // Restore results section
+            const resultsSection = document.getElementById('resultsSection');
+            resultsSection.innerHTML = `
+                <div class="results-header">
+                    <div class="results-title">Analysis Results</div>
+                    <div class="pattern-count" id="patternCount">${data.patterns.length} Patterns Found</div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="priceChart"></canvas>
+                </div>
+                <div class="patterns-grid" id="patternsGrid"></div>
+            `;
 
             createPriceChart(data);
             displayPatternCards(data.patterns);
         }
 
         function createPriceChart(data) {
-            console.log('Creating chart with', data.prices.length, 'data points');
+            console.log('Creating chart with', data.prices.length, 'data points and', data.patterns.length, 'patterns');
 
             const ctx = document.getElementById('priceChart').getContext('2d');
 
@@ -572,65 +558,85 @@
                 priceChart.destroy();
             }
 
-            const labels = data.timestamps.map(ts => ts.toLocaleTimeString('en-US', {hour12: false}));
+            const labels = data.timestamps.map(ts => ts.toLocaleTimeString('en-US', {hour12: false, hour: '2-digit', minute: '2-digit'}));
 
             const datasets = [{
                 label: 'Bitcoin Price',
                 data: data.prices,
-                borderColor: '#667eea',
-                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                borderColor: '#2c3e50',
+                backgroundColor: 'rgba(44, 62, 80, 0.1)',
                 borderWidth: 2,
                 fill: true,
-                tension: 0.1
+                tension: 0.1,
+                pointRadius: 0,
+                pointHoverRadius: 5
             }];
 
-            // Add pattern points
-            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1'];
-            const pointColors = ['#000000', '#ff0000', '#00ff00', '#0000ff'];
+            // Add patterns
+            const patternColors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#e67e22', '#1abc9c', '#34495e', '#ff6b6b', '#4ecdc4'];
 
             data.patterns.forEach(function(pattern, idx) {
-                const patternColor = colors[idx % colors.length];
+                if (idx >= 10) return; // Limit to 10 patterns like main.py
 
-                // Add pattern line
-                const patternPoints = [];
+                const patternColor = patternColors[idx % patternColors.length];
+                const isCompleted = pattern.status === 'completed';
+                const isFailed = pattern.status === 'failed';
+
+                // Validate and add pattern points
+                const validPoints = [];
                 ['A', 'B', 'C', 'D'].forEach(function(point) {
-                    if (pattern[point]) {
-                        const index = pattern[point][0];
+                    if (pattern[point] && Array.isArray(pattern[point]) && pattern[point].length >= 2) {
+                        let index = Math.floor(pattern[point][0]);
                         const price = pattern[point][1];
-                        patternPoints.push({x: labels[index], y: price});
+
+                        // Ensure index is valid
+                        if (index < 0) index = 0;
+                        if (index >= labels.length) index = labels.length - 1;
+
+                        if (price > 0) {
+                            validPoints.push({
+                                point: point,
+                                index: index,
+                                price: price,
+                                x: labels[index],
+                                y: price
+                            });
+                        }
                     }
                 });
 
-                datasets.push({
-                    label: pattern.direction.toUpperCase() + ' Pattern ' + (idx + 1),
-                    data: patternPoints,
-                    borderColor: patternColor,
-                    backgroundColor: 'transparent',
-                    pointRadius: 0,
-                    showLine: true,
-                    borderWidth: 2,
-                    fill: false,
-                    tension: 0
-                });
+                if (validPoints.length >= 3) {
+                    // Pattern line
+                    const lineData = validPoints.map(p => ({x: p.x, y: p.y}));
 
-                // Add individual points
-                ['A', 'B', 'C', 'D'].forEach(function(point, pointIdx) {
-                    if (pattern[point]) {
-                        const index = pattern[point][0];
-                        const price = pattern[point][1];
-                        const pointColor = pointColors[pointIdx];
+                    datasets.push({
+                        label: `${pattern.direction.toUpperCase()} Pattern ${idx + 1}`,
+                        data: lineData,
+                        borderColor: patternColor,
+                        backgroundColor: 'transparent',
+                        pointRadius: 0,
+                        showLine: true,
+                        borderWidth: 2,
+                        borderDash: isFailed ? [5, 5] : [],
+                        fill: false,
+                        tension: 0.1
+                    });
+
+                    // Individual points
+                    validPoints.forEach(function(pointData) {
+                        const pointColors = {A: '#2c3e50', B: '#e74c3c', C: '#f39c12', D: '#3498db'};
 
                         datasets.push({
-                            label: 'Point ' + point + (idx + 1),
-                            data: [{x: labels[index], y: price}],
-                            borderColor: pointColor,
-                            backgroundColor: pointColor,
-                            pointRadius: 10,
+                            label: `${pointData.point}${idx + 1}`,
+                            data: [{x: pointData.x, y: pointData.y}],
+                            borderColor: pointColors[pointData.point],
+                            backgroundColor: pointColors[pointData.point],
+                            pointRadius: 8,
                             showLine: false,
                             borderWidth: 2
                         });
-                    }
-                });
+                    });
+                }
             });
 
             priceChart = new Chart(ctx, {
@@ -645,19 +651,26 @@
                     plugins: {
                         title: {
                             display: true,
-                            text: 'Bitcoin Analysis - ' + data.originalDate + ' (' + (data.isRealData ? 'Real Data' : 'Simulation') + ')',
+                            text: `Bitcoin Pattern Analysis - ${data.originalDate}`,
                             font: { size: 16, weight: 'bold' }
                         },
                         legend: {
-                            position: 'top'
+                            position: 'top',
+                            labels: {
+                                usePointStyle: true,
+                                boxWidth: 8,
+                                font: { size: 10 }
+                            }
                         }
                     },
                     scales: {
                         x: {
-                            title: { display: true, text: 'Time' }
+                            title: { display: true, text: 'Time' },
+                            grid: { color: 'rgba(0,0,0,0.1)' }
                         },
                         y: {
                             title: { display: true, text: 'Price (USD)' },
+                            grid: { color: 'rgba(0,0,0,0.1)' },
                             ticks: {
                                 callback: function(value) {
                                     return '$' + value.toLocaleString();
@@ -685,37 +698,38 @@
 
             const statusClass = 'status-' + pattern.status.replace('_', '-');
 
-            card.innerHTML =
-                '<div class="pattern-header">' +
-                '<div class="pattern-title">Pattern ' + index + ': ' + pattern.direction.toUpperCase() + 'TREND</div>' +
-                '<div class="pattern-status ' + statusClass + '">' + pattern.status + '</div>' +
-                '</div>' +
-                '<div class="pattern-details">' +
-                '<div class="detail-row">' +
-                '<span class="detail-label">Initial Move:</span>' +
-                '<span class="detail-value">' + pattern.initial_move_pct.toFixed(2) + '%</span>' +
-                '</div>' +
-                '<div class="detail-row">' +
-                '<span class="detail-label">Retracement:</span>' +
-                '<span class="detail-value">' + pattern.retracement_pct.toFixed(1) + '%</span>' +
-                '</div>' +
-                '<div class="detail-row">' +
-                '<span class="detail-label">A Point:</span>' +
-                '<span class="detail-value">$' + pattern.A[1].toFixed(2) + '</span>' +
-                '</div>' +
-                '<div class="detail-row">' +
-                '<span class="detail-label">B Point:</span>' +
-                '<span class="detail-value">$' + pattern.B[1].toFixed(2) + '</span>' +
-                '</div>' +
-                '<div class="detail-row">' +
-                '<span class="detail-label">C Point:</span>' +
-                '<span class="detail-value">$' + pattern.C[1].toFixed(2) + '</span>' +
-                '</div>' +
-                '<div class="detail-row">' +
-                '<span class="detail-label">D Point:</span>' +
-                '<span class="detail-value">$' + pattern.D[1].toFixed(2) + '</span>' +
-                '</div>' +
-                '</div>';
+            card.innerHTML = `
+                <div class="pattern-header">
+                    <div class="pattern-title">Pattern ${index}: ${pattern.direction.toUpperCase()}</div>
+                    <div class="pattern-status ${statusClass}">${pattern.status.toUpperCase()}</div>
+                </div>
+                <div class="pattern-details">
+                    <div class="detail-row">
+                        <span class="detail-label">Initial Move:</span>
+                        <span class="detail-value">${pattern.initial_move_pct.toFixed(2)}%</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Retracement:</span>
+                        <span class="detail-value">${pattern.retracement_pct.toFixed(1)}%</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">A Point:</span>
+                        <span class="detail-value">$${pattern.A[1].toFixed(2)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">B Point:</span>
+                        <span class="detail-value">$${pattern.B[1].toFixed(2)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">C Point:</span>
+                        <span class="detail-value">$${pattern.C[1].toFixed(2)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">D Point:</span>
+                        <span class="detail-value">$${pattern.D[1].toFixed(2)}</span>
+                    </div>
+                </div>
+            `;
 
             return card;
         }
@@ -726,7 +740,7 @@
             resultsSection.style.display = 'block';
         }
 
-        console.log('JavaScript loaded successfully');
+        console.log('Bitcoin Analyzer loaded successfully!');
     </script>
 </body>
 </html>

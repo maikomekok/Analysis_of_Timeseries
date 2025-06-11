@@ -358,11 +358,29 @@ def build_pattern_config(params_dict):
     pattern_detection = params_dict.get('pattern_detection', {})
 
     config = {
+        # Basic parameters
         "retracement_target": pattern_detection.get("retracement_target", 0.5),
         "retracement_tolerance": pattern_detection.get("retracement_tolerance", 0.02),
         "completion_extension": pattern_detection.get("completion_extension", 0.236),
         "failure_level": pattern_detection.get("failure_level", 0.764),
-        "min_move_multiplier": pattern_detection.get("min_move_multiplier", 2.0)
+        "min_move_multiplier": pattern_detection.get("min_move_multiplier", 2.0),
+
+        # Critical control flags
+        "use_only_absolute_extremes": pattern_detection.get("use_only_absolute_extremes", False),
+        "detect_local_extremes": pattern_detection.get("detect_local_extremes", True),
+        "detect_overlapping_patterns": pattern_detection.get("detect_overlapping_patterns", True),
+        "enforce_window_extremes": pattern_detection.get("enforce_window_extremes", False),
+        "search_beyond_window_for_failure": pattern_detection.get("search_beyond_window_for_failure", True),
+
+        # Additional settings
+        "use_strict_swing_points": pattern_detection.get("use_strict_swing_points", False),
+        "only_show_significant": pattern_detection.get("only_show_significant", True),
+        "significant_patterns_only": pattern_detection.get("significant_patterns_only", ["completed", "failed"]),
+
+        # Nested configurations
+        "pattern_priority": pattern_detection.get("pattern_priority", {}),
+        "scoring_weights": pattern_detection.get("scoring_weights", {}),
+        "validation_rules": pattern_detection.get("validation_rules", {})
     }
 
     return config
