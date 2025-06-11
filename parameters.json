@@ -1,17 +1,75 @@
 {
     "min_change": 0.005,
-    "window_sizes": [100, 300, 600, 1000],
-    "overlap": 10,
-    "top_patterns": 10,
+    "window_sizes": [50, 150, 300,450,600, 800],
+    "overlap": 50,
+    "top_patterns": 50,
     "time_window": 120,
     "pattern_detection": {
         "retracement_target": 0.5,
-        "failure_level": 0.764,
-        "completion_extension": 0.236,
         "retracement_tolerance": 0.02,
+        "completion_extension": 0.236,
+        "failure_level": 0.764,
+        "min_move_multiplier": 1.0,
         "use_strict_swing_points": false,
-        "min_move_multiplier": 2.0,
         "only_show_significant": true,
-        "significant_patterns_only": ["completed", "failed"]
+        "significant_patterns_only": ["completed", "failed"],
+        "use_only_absolute_extremes": true,
+        "detect_local_extremes": false,
+        "detect_overlapping_patterns": false,
+        "enforce_window_extremes": true,
+        "search_beyond_window_for_failure": true,
+        "pattern_priority": {
+            "completed": 5,
+            "failed": 3,
+            "in_progress": 0
+        },
+        "scoring_weights": {
+            "initial_move": 1.0,
+            "retracement_quality": 2.0,
+            "absolute_extreme_bonus": 3.0,
+            "global_extreme_bonus": 2.0,
+            "overlap_bonus": 1.5,
+            "accurate_failure_bonus": 1.0
+        },
+        "validation_rules": {
+            "require_absolute_A": true,
+            "require_global_B_after_A": true,
+            "min_points_separation": 5,
+            "max_retracement_deviation": 0.02,
+            "require_definitive_status": true,
+            "validate_D_position": true
+        }
+    },
+    "advanced_options": {
+        "adaptive_lookback": false,
+        "atr_period": 14,
+        "volume_confirmation": false,
+        "trend_alignment": true,
+        "multi_timeframe_confirmation": false,
+        "use_comprehensive_detection": false
+    },
+    "output_settings": {
+        "save_plots": true,
+        "plot_dpi": 300,
+        "show_fibonacci_levels": true,
+        "show_all_patterns": false,
+        "highlight_failed_patterns": true,
+        "highlight_global_extremes": true,
+        "include_pattern_statistics": true,
+        "mark_accurate_failure_points": true
+    },
+    "data_processing": {
+        "handle_gaps": true,
+        "interpolate_missing": false,
+        "outlier_removal": false,
+        "outlier_threshold": 3.0,
+        "min_data_points": 50
+    },
+    "display_options": {
+        "show_A_as_global": true,
+        "show_B_as_global": true,
+        "use_special_markers": true,
+        "label_key_points": true,
+        "color_scheme": "status_based"
     }
 }
