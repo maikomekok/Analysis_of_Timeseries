@@ -8,8 +8,6 @@ import sys
 sys.path.append('.')
 from analyze import (load_and_prepare_data, analyze_multiple_windows,
                      detect_multiple_timeframe_trends, find_significant_price_patterns)
-from data_convertion import process_bitcoin_data
-from data_fetcher import download_btc_raw_data
 
 app = Flask(__name__)
 CORS(app)
