@@ -1,994 +1,650 @@
-import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
-import matplotlib.dates as mdates
-from datetime import datetime, timedelta
-
-
-def detect_trend_with_ma(prices, short_window=20, long_window=50):
-    """
-    LEGACY FUNCTION: Kept for backward compatibility.
-    Detects trend direction using moving averages.
-    """
-    prices_array = np.array(prices)
-    if len(prices_array) < long_window:
-        return "up" if prices_array[-1] > prices_array[0] else "down"
-    short_ma = np.convolve(prices_array, np.ones(short_window) / short_window, mode='valid')
-    long_ma = np.convolve(prices_array, np.ones(long_window) / long_window, mode='valid')
-
-    offset = long_window - short_window
-    short_ma = short_ma[offset:]
-
-    recent_periods = min(10, len(short_ma) - 1)
-    short_ma_slope = short_ma[-1] - short_ma[-recent_periods - 1]
-
-    if short_ma[-1] > long_ma[-1] and short_ma_slope > 0:
-        return "up"
-    elif short_ma[-1] < long_ma[-1] and short_ma_slope < 0:
-        return "down"
-    elif short_ma_slope > 0:
-        return "up"
-    else:
-        return "down"
-
-
-def detect_multiple_timeframe_trends(prices, windows=[(5, 10), (20, 50), (50, 200)]):
-    """
-    LEGACY FUNCTION: Kept for backward compatibility.
-    Detects trends across multiple timeframes.
-    """
-    trends = {}
-
-    for short_window, long_window in windows:
-        if len(prices) < long_window:
-            continue
-
-        trend_name = f"{short_window}_{long_window}"
-        trends[trend_name] = detect_trend_with_ma(prices, short_window, long_window)
-
-    if trends:
-        up_count = sum(1 for t in trends.values() if t == "up")
-        down_count = sum(1 for t in trends.values() if t == "down")
-
-        if up_count > down_count:
-            trends["overall"] = "up"
-        elif down_count > up_count:
-            trends["overall"] = "down"
-        else:
-            trends["overall"] = "conflicting"
-    else:
-        trends["overall"] = detect_trend_with_ma(prices)
-
-    return trends
-
-
-def find_significant_price_patterns(prices, dates, min_change_pct=0.005, config=None):
-    """
-    Find significant price patterns with specific criteria for both uptrend and downtrend:
-
-    UPTREND:
-    1. A is the absolute lowest point in the dataset
-    2. B is the highest point after A that has a valid C point (50% retracement)
-    3. C is the retracement point at exactly 50% (within tolerance)
-    4. D is determined by completion/failure levels
-
-    DOWNTREND:
-    1. A is the absolute highest point in the dataset
-    2. B is the lowest point after A that has a valid C point (50% retracement)
-    3. C is the retracement point at exactly 50% (within tolerance)
-    4. D is determined by completion/failure levels
-
-    Pattern fails when price breaks 76.4% level after C and D cannot reach completion level.
-    """
-
-    if config is None:
-        config = {}
-
-    patterns = []
-
-    # UPTREND PATTERN DETECTION
-    print("=== DETECTING UPTREND PATTERNS ===")
-    uptrend_patterns = detect_uptrend_patterns(prices, dates, min_change_pct, config)
-    patterns.extend(uptrend_patterns)
-
-    # DOWNTREND PATTERN DETECTION
-    print("=== DETECTING DOWNTREND PATTERNS ===")
-    downtrend_patterns = detect_downtrend_patterns(prices, dates, min_change_pct, config)
-    patterns.extend(downtrend_patterns)
-
-    print(
-        f"Total patterns found: {len(patterns)} ({len(uptrend_patterns)} uptrend, {len(downtrend_patterns)} downtrend)")
-    return patterns
-def analyze_move(result):
-    """Legacy function name kept for compatibility"""
-    if result is None:
-        return "No valid pattern found."
-
-    # Handle multiple patterns
-    if isinstance(result, list):
-        analyses = []
-        for i, pattern in enumerate(result):
-            analysis = analyze_single_pattern(pattern)
-            analyses.append(f"Pattern {i + 1} ({pattern['direction']}): {analysis}")
-        return "\n".join(analyses)
-    else:
-        return analyze_single_pattern(result)
-
-
-def draw_fibonacci_levels(ax, prices, dates, result, direction, is_failed=False):
-    if result:
-        A, B = result['A'][1], result['B'][1]
-    else:
-        min_idx = np.argmin(prices)
-        max_idx = np.argmax(prices)
-
-        if direction == "up":
-            A_value = prices[min_idx]
-            B_value = prices[max_idx]
-        else:
-            A_value = prices[max_idx]
-            B_value = prices[min_idx]
-
-        A, B = A_value, B_value
-
-    main_move = B - A if direction == "up" else A - B
-
-    # Fibonacci levels with extended levels
-    fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.764, 0.854, 1.0, 1.236, 1.618, -0.236, -0.618]
-
-    # Different style for failed patterns
-    linestyle = '--' if not is_failed else '-.'
-    linewidth = 1.5 if not is_failed else 2.0
-    alpha = 0.6 if not is_failed else 0.8
-
-    # Level colors
-    level_colors = {
-        0: '#FF0000',  # Red
-        0.236: '#FF7F00',  # Orange
-        0.382: '#FFFF00',  # Yellow
-        0.5: '#00FF00',  # Green
-        0.618: '#0000FF',  # Blue
-        0.764: '#FF0000' if is_failed else '#4B0082',  # Red if failed, otherwise Indigo
-        0.854: '#708090',  # SlateGray
-        1.0: '#8F00FF',  # Violet
-        1.236: '#FFA500',  # Orange extension
-        1.618: '#32CD32',  # LimeGreen extension
-        -0.236: '#FFC0CB',  # Pink
-        -0.618: '#800080'  # Purple
-    }
-
-    for level in fib_levels:
-        fib_price = B - (main_move * level) if direction == "up" else B + (main_move * level)
-
-        # Special formatting for 76.4% level in failed patterns
-        if is_failed and level == 0.764:
-            ax.axhline(
-                y=fib_price,
-                color='red',
-                linestyle='-',
-                alpha=1.0,
-                linewidth=2.5,
-                label=f'Failed at {level * 100:.1f}%'
-            )
-            ax.text(
-                dates[0],
-                fib_price,
-                f'{level * 100:.1f}% FAILED',
-                fontsize=12,
-                fontweight='bold',
-                verticalalignment='center',
-                color='red'
-            )
-        else:
-            ax.axhline(
-                y=fib_price,
-                color=level_colors.get(level, 'gray'),
-                linestyle=linestyle,
-                alpha=alpha,
-                linewidth=linewidth,
-                label=f'Fib {level * 100:.1f}%'
-            )
-            ax.text(
-                dates[0],
-                fib_price,
-                f'{level * 100:.1f}%',
-                fontsize=10,
-                verticalalignment='center',
-                color=level_colors.get(level, 'gray')
-            )
-
-    # Add custom levels
-    if result and 'failure_level' in result:
-        failure_level = result['failure_level']
-        ax.axhline(
-            y=failure_level,
-            color='red',
-            linestyle='--',
-            alpha=1.0,
-            linewidth=2.5,
-            label='76.4% Failure Level'
-        )
-        ax.text(
-            dates[0],
-            failure_level,
-            '76.4% Failure',
-            fontsize=12,
-            fontweight='bold',
-            verticalalignment='center',
-            color='red'
-        )
-
-    if result and 'completion_level' in result:
-        completion_level = result['completion_level']
-        ax.axhline(
-            y=completion_level,
-            color='green',
-            linestyle='--',
-            alpha=1.0,
-            linewidth=2.5,
-            label='-23.6% Completion Level'
-        )
-        ax.text(
-            dates[0],
-            completion_level,
-            '-23.6% Completion',
-            fontsize=12,
-            fontweight='bold',
-            verticalalignment='center',
-            color='green'
-        )
-
-    return ax
-
-
-def analyze_single_pattern(pattern):
-    """
-    Analyze a single Fibonacci pattern.
-    """
-    direction = pattern["direction"]
-    retracement_pct = pattern.get("retracement_pct", 0)
-    initial_move_pct = pattern.get("initial_move_pct", 0)
-    status = pattern.get("status", "unknown")
-
-    A_price = pattern["A"][1]
-    B_price = pattern["B"][1]
-    C_price = pattern["C"][1]
-    D_price = pattern["D"][1]
-
-    if status == "failed":
-        analysis = f"Failed {direction}trend pattern - Retracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
-    elif status == "completed":
-        analysis = f"Completed {direction}trend pattern - Retracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
-    else:  # in_progress
-        analysis = f"In-progress {direction}trend pattern - Retracement: {retracement_pct:.1f}%, Initial Move: {initial_move_pct:.1f}%"
-
-    if "failure_level" in pattern:
-        analysis += f"\nFailure level (76.4%): {pattern['failure_level']:.2f}"
-
-    if "completion_level" in pattern:
-        analysis += f"\nCompletion level (-23.6%): {pattern['completion_level']:.2f}"
-
-    if "target_level" in pattern:
-        analysis += f"\nTarget level (50%): {pattern['target_level']:.2f}"
-
-    return analysis
-
-
-def plot_diagnostic_graph(prices, dates, result=None):
-    """
-    Plot a diagnostic graph showing price series, moving averages, and Fibonacci levels.
-    """
-    fig, ax = plt.subplots(figsize=(16, 10))
-
-    short_window = 20
-    long_window = 50
-
-    if len(prices) >= long_window:
-        prices_array = np.array(prices)
-        short_ma = np.convolve(prices_array, np.ones(short_window) / short_window, mode='valid')
-        long_ma = np.convolve(prices_array, np.ones(long_window) / long_window, mode='valid')
-
-    trends = detect_multiple_timeframe_trends(prices)
-    trend_str = ", ".join([f"{k}: {v}" for k, v in trends.items()])
-
-    recent_window = min(20, len(prices))
-    recent_prices = prices[-recent_window:]
-
-    # Use linear regression to determine trend slope
-    x = np.arange(recent_window)
-    slope, _ = np.polyfit(x, recent_prices, 1)
-
-    # Also check the short MA at the end vs beginning
-    if len(prices) >= short_window * 2:
-        short_ma_end = np.convolve(prices, np.ones(short_window) / short_window, mode='valid')
-        short_ma_trend = short_ma_end[-1] - short_ma_end[-min(10, len(short_ma_end))]
-    else:
-        short_ma_trend = 0
-
-    # Determine the visual trend from recent data
-    visual_direction = "up" if (slope > 0 or short_ma_trend > 0) else "down"
-
-    # If result is provided, use its direction, otherwise use visual direction
-    direction = result['direction'] if result else visual_direction
-    move_type = "Upward" if direction == "up" else "Downward"
-    ax.set_title(f'Price Series Diagnostic Plot - {move_type} Move\n(Timeframe Trends: {trend_str})', fontsize=14)
-
-    if result:
-        # Check if we have multiple patterns
-        if isinstance(result, list):
-            # Draw all patterns with different colors
-            colors = [('black', 'red', 'green', 'blue'), ('purple', 'orange', 'cyan', 'magenta')]
-
-            for i, pattern in enumerate(result):
-                # Check if this is a failed pattern
-                is_failed = pattern.get('status') == 'failed'
-                marker_size = 150 if is_failed else 100
-                marker_style = 'x' if is_failed else 'o'
-
-                color_set = colors[i % len(colors)]
-                points = {'A': (color_set[0], pattern['A']), 'B': (color_set[1], pattern['B']),
-                          'C': (color_set[2], pattern['C']), 'D': (color_set[3], pattern['D'])}
-
-                for label, (color, point) in points.items():
-                    idx, price = point
-                    ax.scatter(dates[idx], price, color=color, s=marker_size, zorder=3, marker=marker_style)
-
-                    if is_failed and label == 'C':
-                        ax.text(dates[idx], price, f"{label}{i + 1} (FAILED)", fontsize=14, fontweight='bold',
-                                ha='right', va='bottom', color='red')
-                    else:
-                        ax.text(dates[idx], price, f"{label}{i + 1}", fontsize=14, fontweight='bold',
-                                ha='right', va='bottom', color=color)
-
-                # Draw Fibonacci levels using the detected points
-                ax = draw_fibonacci_levels(ax, prices, dates, pattern, pattern['direction'], is_failed=is_failed)
-        else:
-            # Single pattern
-            is_failed = result.get('status') == 'failed'
-            marker_size = 150 if is_failed else 100
-            marker_style = 'x' if is_failed else 'o'
-
-            points = {'A': ('black', result['A']), 'B': ('red', result['B']),
-                      'C': ('green', result['C']), 'D': ('blue', result['D'])}
-
-            for label, (color, point) in points.items():
-                idx, price = point
-                ax.scatter(dates[idx], price, color=color, s=marker_size, zorder=3, marker=marker_style)
-
-                if is_failed and label == 'C':
-                    ax.text(dates[idx], price, f"{label} (FAILED)", fontsize=14, fontweight='bold',
-                            ha='right', va='bottom', color='red')
-                else:
-                    ax.text(dates[idx], price, label, fontsize=14, fontweight='bold',
-                            ha='right', va='bottom', color=color)
-
-            # Draw Fibonacci levels using the detected points
-            ax = draw_fibonacci_levels(ax, prices, dates, result, direction, is_failed=is_failed)
-    else:
-        # Draw Fibonacci levels based on min/max if no pattern detected
-        ax = draw_fibonacci_levels(ax, prices, dates, None, direction)
-
-    # Format x-axis with dates
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d/%y %H:%M'))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate()
-
-    ax.set_xlabel('Date', fontsize=12)
-    ax.set_ylabel('Price', fontsize=12)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper right')
-    plt.tight_layout()
-
-    return fig, ax
-
-
-def analyze_price_data(prices, dates, min_change_threshold=0.005, pattern_config=None):
-    trends = detect_multiple_timeframe_trends(prices)
-    print(f"Trends across multiple timeframes: {trends}")
-
-    result = find_significant_price_patterns(
-        prices,
-        dates,
-        min_change_threshold,
-        config=pattern_config
-    )
-
-    analysis = analyze_move(result) if result else "No valid pattern found."
-
-    return result, analysis, trends
-
-
-def display_results(prices, dates, result, analysis, trends):
-    """
-    Display the results of the Fibonacci pattern analysis.
-    """
-    # Create and show the diagnostic plot
-    fig, ax = plt.subplots(figsize=(16, 10))
-
-    # Plot the price series with small markers to see actual movements
-    ax.plot(dates, prices, marker='o', linestyle='-', color='black', alpha=0.7,
-            label='Price Series', markersize=3)
-
-    # Format x-axis with dates
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d/%y'))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate()
-
-    # Determine direction and title
-    direction = "up"
-    if result:
-        if isinstance(result, list):
-            direction = result[0]['direction']
-        else:
-            direction = result['direction']
-    else:
-        direction = trends.get('overall', 'unknown')
-
-    move_type = "Upward" if direction == "up" else "Downward"
-    trend_str = ", ".join([f"{k}: {v}" for k, v in trends.items()])
-    ax.set_title(f'Price Series Diagnostic Plot - {move_type} Timeframe Trends: {trend_str})', fontsize=14)
-
-    # Print analysis results
-    print("\nAnalysis Results:")
-    print("-" * 50)
-    print(f"Overall trend direction: {trends.get('overall', 'unknown')}")
-    print(f"Analysis: {analysis}")
-
-    # Draw Fibonacci levels and pattern points
-    if result:
-        if isinstance(result, list):
-            print(f"Detected {len(result)} different patterns")
-            colors = [('black', 'red', 'green', 'blue'), ('purple', 'orange', 'cyan', 'magenta')]
-
-            for i, pattern in enumerate(result):
-                print(f"\nPattern {i + 1}:")
-                print(f"Detected trend: {pattern['direction']}")
-                print(f"Initial move: {pattern['initial_move_pct']:.2f}%")
-                print(f"Retracement: {pattern['retracement_pct']:.2f}%")
-                print(f"Status: {pattern['status']}")
-
-                is_failed = pattern.get('status') == 'failed'
-                marker_size = 150 if is_failed else 100
-                marker_style = 'x' if is_failed else 'o'
-
-                color_set = colors[i % len(colors)]
-                points = {'A': (color_set[0], pattern['A']), 'B': (color_set[1], pattern['B']),
-                          'C': (color_set[2], pattern['C']), 'D': (color_set[3], pattern['D'])}
-
-                for label, (color, point) in points.items():
-                    idx, price = point
-
-                    if idx >= len(dates):
-                        print(f"Warning: Point {label} of pattern {i + 1} has index {idx} outside range.")
-                        idx = len(dates) - 1
-
-                    ax.scatter(dates[idx], price, color=color, s=marker_size, zorder=3, marker=marker_style)
-
-                    if is_failed and label == 'C':
-                        ax.text(dates[idx], price, f"{label}{i + 1} (FAILED)", fontsize=14, fontweight='bold',
-                                ha='right', va='bottom', color='red')
-                    else:
-                        ax.text(dates[idx], price, f"{label}{i + 1}", fontsize=14, fontweight='bold',
-                                ha='right', va='bottom', color=color)
-
-                    print(f"{label}: Index {idx}, Date {dates[idx].strftime('%Y-%m-%d %H:%M')}, Price {price}")
-
-                draw_fibonacci_levels(ax, prices, dates, pattern, pattern['direction'], is_failed=is_failed)
-
-                # Print Fibonacci levels
-                A, B = pattern['A'][1], pattern['B'][1]
-                main_move = B - A if pattern['direction'] == "up" else A - B
-                print(f"\nKey Fibonacci levels for Pattern {i + 1}:")
-                for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, 1.236, 1.618, -0.236, -0.618]:
-                    fib_price = B - (main_move * level) if pattern['direction'] == "up" else B + (main_move * level)
-                    print(f"{level * 100:.1f}%: {fib_price:.2f}")
-
-                if 'failure_level' in pattern:
-                    print(f"76.4% Failure level: {pattern['failure_level']:.2f}")
-                if 'completion_level' in pattern:
-                    print(f"-23.6% Completion level: {pattern['completion_level']:.2f}")
-        else:
-            print(f"Detected trend: {result['direction']}")
-            print(f"Initial move: {result['initial_move_pct']:.2f}%")
-            print(f"Retracement: {result['retracement_pct']:.2f}%")
-            print(f"Status: {result['status']}")
-
-            is_failed = result.get('status') == 'failed'
-            marker_size = 150 if is_failed else 100
-            marker_style = 'x' if is_failed else 'o'
-
-            points = {'A': ('black', result['A']), 'B': ('red', result['B']),
-                      'C': ('green', result['C']), 'D': ('blue', result['D'])}
-
-            for label, (color, point) in points.items():
-                idx, price = point
-
-                if idx >= len(dates):
-                    print(f"Warning: Point {label} has index {idx} outside range.")
-                    idx = len(dates) - 1
-
-                ax.scatter(dates[idx], price, color=color, s=marker_size, zorder=3, marker=marker_style)
-
-                if is_failed and label == 'C':
-                    ax.text(dates[idx], price, f"{label} (FAILED)", fontsize=14, fontweight='bold',
-                            ha='right', va='bottom', color='red')
-                else:
-                    ax.text(dates[idx], price, label, fontsize=14, fontweight='bold',
-                            ha='right', va='bottom', color=color)
-
-                print(f"{label}: Index {idx}, Date {dates[idx].strftime('%Y-%m-%d %H:%M')}, Price {price}")
-
-            draw_fibonacci_levels(ax, prices, dates, result, result['direction'], is_failed=is_failed)
-
-            A, B = result['A'][1], result['B'][1]
-            main_move = B - A if result['direction'] == "up" else A - B
-            print("\nKey Fibonacci levels:")
-            for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, 1.236, 1.618, -0.236, -0.618]:
-                fib_price = B - (main_move * level) if result['direction'] == "up" else B + (main_move * level)
-                print(f"{level * 100:.1f}%: {fib_price:.2f}")
-
-            if 'failure_level' in result:
-                print(f"76.4% Failure level: {result['failure_level']:.2f}")
-            if 'completion_level' in result:
-                print(f"-23.6% Completion level: {result['completion_level']:.2f}")
-    else:
-        print("Could not find a valid Fibonacci retracement pattern.")
-        draw_fibonacci_levels(ax, prices, dates, None, direction)
-
-    ax.set_xlabel('Date', fontsize=12)
-    ax.set_ylabel('Price', fontsize=12)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper right')
-    plt.tight_layout()
-
-    return fig, ax
-
-
-def analyze_multiple_windows(prices, dates, window_sizes=[50, 100, 200],
-                             overlap_percent=50, min_change_threshold=0.001,
-                             allow_multiple_patterns=True, detect_long_failures=True,
-                             pattern_config=None):
-    """
-    Analyze the same price series with different window sizes using updated pattern detection.
-    """
-    all_patterns = []
-
-    window_sizes = sorted(window_sizes)
-
-    for window_size in window_sizes:
-        if window_size >= len(prices):
-            print(f"Window size {window_size} is larger than available data ({len(prices)} points). Skipping.")
-            continue
-
-        # Calculate step size based on overlap percentage
-        step_size = max(1, int(window_size * (1 - overlap_percent / 100)))
-
-        # Iterate through the data with the current window size
-        for start_idx in range(0, len(prices) - window_size + 1, step_size):
-            end_idx = start_idx + window_size
-
-            # Get the window data
-            window_prices = prices[start_idx:end_idx]
-            window_dates = dates[start_idx:end_idx]
-
-            # Use the updated pattern detection method
-            window_patterns = find_significant_price_patterns(
-                window_prices,
-                window_dates,
-                min_change_threshold,
-                config=pattern_config
-            )
-
-            # If patterns were found, analyze them and add to results
-            if window_patterns:
-                window_info = {
-                    "window_size": window_size,
-                    "start_idx": start_idx,
-                    "end_idx": end_idx,
-                    "start_date": dates[start_idx],
-                    "end_date": dates[end_idx - 1],
-                    "window_prices": window_prices,
-                    "window_dates": window_dates
-                }
-
-                for pattern in window_patterns:
-                    pattern_analysis = analyze_single_pattern(pattern)
-                    all_patterns.append((pattern, pattern_analysis, window_info))
-
-    # Sort patterns by significance
-    all_patterns.sort(key=lambda x: pattern_significance(x[0]), reverse=True)
-
-    return all_patterns
-
-
-def pattern_significance(pattern):
-    """
-    Calculate a significance score for a pattern.
-    Higher score = more significant pattern.
-    """
-    # Prioritize larger initial moves
-    if 'initial_move_pct' in pattern:
-        score = min(pattern['initial_move_pct'] / 5, 5)  # Cap at 5 for moves >= 25%
-
-        # Add bonus for completed or failed patterns
-        if pattern.get('status') == 'completed':
-            score += 3
-        elif pattern.get('status') == 'failed':
-            score += 2  # Failed patterns are also significant
-        elif pattern.get('status') == 'in_progress':
-            score += 1
-
-        # Add bonus for retracement close to 50%
-        retrace_pct = pattern.get('retracement_pct', 0)
-        retrace_quality = 1.0 - abs(retrace_pct - 50) / 50  # 1.0 for perfect 50%, 0 for 0% or 100%
-        score += retrace_quality * 2
-
-        return score
-
-    # Legacy method for backward compatibility
-    A, B, C, D = pattern['A'][1], pattern['B'][1], pattern['C'][1], pattern['D'][1]
-    direction = pattern['direction']
-
-    # Calculate move sizes
-    if direction == "up":
-        initial_move = B - A
-        retracement = B - C
-        extension = D - C
-    else:
-        initial_move = A - B
-        retracement = C - B
-        extension = C - D
-
-    # Calculate retracement ratio
-    retracement_ratio = retracement / initial_move if initial_move != 0 else 0
-
-    # Calculate extension ratio
-    extension_ratio = extension / initial_move if initial_move != 0 else 0
-
-    # Ideal retracement is around 50%
-    retracement_quality = 1.0 - abs(retracement_ratio - 0.5)
-
-    # Size of the overall move matters
-    move_size = abs(D - A)
-
-    # Check if pattern is failed
-    is_failed = pattern.get('status') == 'failed'
-
-    # Failed patterns are very interesting
-    failed_bonus = 1.0 if is_failed else 0
-
-    # Combine factors into a single score
-    score = (
-            move_size * 0.4 +
-            retracement_quality * 0.3 +
-            failed_bonus
-    )
-
-    return score
-
-
-def create_longterm_pattern_figure(prices, dates, all_patterns):
-    """
-    Create a dedicated figure for significant patterns across the entire dataset.
-    """
-    # Extract patterns with significant moves (over 2%)
-    significant_patterns = []
-
-    for pattern_idx, (pattern, analysis, window_info) in enumerate(all_patterns):
-        if isinstance(pattern, dict) and pattern.get('initial_move_pct', 0) >= 2.0:
-            significant_patterns.append((pattern_idx, pattern, analysis, window_info))
-
-    if not significant_patterns:
-        print("No significant patterns detected in the dataset")
-        return None
-
-    # Create figure for significant patterns
-    fig, ax = plt.subplots(figsize=(20, 10))
-
-    # Plot the full price series
-    ax.plot(dates, prices, color='black', alpha=0.5, linewidth=1, label='Price')
-
-    # Colors for different patterns
-    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'teal', 'navy', 'olive', 'maroon']
-
-    # Plot each significant pattern
-    for i, (pattern_idx, pattern, analysis, window_info) in enumerate(significant_patterns):
-        color = colors[i % len(colors)]
-
-        # Extract pattern points
-        A_idx, A_price = pattern['A']
-        B_idx, B_price = pattern['B']
-        C_idx, C_price = pattern['C']
-        D_idx, D_price = pattern['D']
-
-        # Convert to global indices
-        start_idx = window_info['start_idx']
-        global_A_idx = start_idx + A_idx
-        global_B_idx = start_idx + B_idx
-        global_C_idx = start_idx + C_idx
-        global_D_idx = start_idx + D_idx
-
-        # Ensure indices are within range
-        if global_A_idx >= len(dates) or global_B_idx >= len(dates) or global_C_idx >= len(
-                dates) or global_D_idx >= len(dates):
-            print(f"Warning: Pattern {pattern_idx + 1} has indices out of range. Skipping.")
-            continue
-
-        # Check if pattern is failed
-        is_failed = pattern.get('status') == 'failed'
-        marker_style = 'x' if is_failed else 'o'
-
-        # Plot points
-        ax.scatter(dates[global_A_idx], A_price, color=color, marker='o', s=120, zorder=5,
-                   label=f'Pattern {pattern_idx + 1} (A)')
-        ax.scatter(dates[global_B_idx], B_price, color=color, marker='s', s=120, zorder=5)
-        ax.scatter(dates[global_C_idx], C_price, color=color, marker=marker_style, s=150, zorder=5)
-        ax.scatter(dates[global_D_idx], D_price, color=color, marker='d', s=120, zorder=5)
-
-        # Add labels
-        ax.text(dates[global_A_idx], A_price, f'A{pattern_idx + 1}', fontsize=12, fontweight='bold', ha='right',
-                va='bottom')
-        ax.text(dates[global_B_idx], B_price, f'B{pattern_idx + 1}', fontsize=12, fontweight='bold', ha='right',
-                va='bottom')
-        ax.text(dates[global_C_idx], C_price, f'C{pattern_idx + 1}{"(F)" if is_failed else ""}', fontsize=12,
-                fontweight='bold', ha='right', va='bottom')
-        ax.text(dates[global_D_idx], D_price, f'D{pattern_idx + 1}', fontsize=12, fontweight='bold', ha='right',
-                va='bottom')
-
-        # Connect the points with lines
-        if is_failed:
-            ax.plot([dates[global_A_idx], dates[global_B_idx], dates[global_C_idx]],
-                    [A_price, B_price, C_price],
-                    linestyle='--', color=color, linewidth=2, alpha=0.7)
-        else:
-            ax.plot([dates[global_A_idx], dates[global_B_idx], dates[global_C_idx], dates[global_D_idx]],
-                    [A_price, B_price, C_price, D_price],
-                    linestyle='-', color=color, linewidth=2, alpha=0.7)
-
-        # Add pattern information
-        direction = pattern['direction']
-        move_pct = pattern.get('initial_move_pct', 0)
-        retrace_pct = pattern.get('retracement_pct', 0)
-
-        text_y_pos = min(prices) + (i * (max(prices) - min(prices)) * 0.05)
-        text_x_pos = dates[int(len(dates) * 0.05)]
-
-        info_text = f"Pattern {pattern_idx + 1}: {direction.upper()}-trend "
-        info_text += f"{pattern.get('status', 'unknown').upper()} "
-        info_text += f"(Move: {move_pct:.1f}%, Retrace: {retrace_pct:.1f}%)"
-
-        ax.text(text_x_pos, text_y_pos, info_text,
-                bbox=dict(facecolor='white', alpha=0.7, edgecolor=color, boxstyle='round'),
-                color=color, fontsize=10, fontweight='bold')
-
-    # Set title and labels
-    num_patterns = len(significant_patterns)
-    ax.set_title(f'Significant Patterns Overview ({num_patterns} patterns detected)', fontsize=16, fontweight='bold')
-    ax.set_xlabel('Date', fontsize=12)
-    ax.set_ylabel('Price', fontsize=12)
-
-    # Format x-axis dates
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate()
-
-    # Add grid and legend
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper left')
-
-    # Adjust layout
-    fig.subplots_adjust(left=0.05, right=0.95, bottom=0.1, top=0.9)
-
-    return fig
-
-
-def create_detailed_pattern_graph(pattern_number, result, analysis, window_info, trends):
-    """Create a detailed graph for a specific pattern with more information."""
-    window_prices = window_info['window_prices']
-    window_dates = window_info['window_dates']
-
-    # Create a figure with 2 subplots: main chart and information panel
-    fig = plt.figure(figsize=(18, 14))
-
-    # Main chart
-    chart_ax = plt.subplot2grid((5, 1), (0, 0), rowspan=4)
-
-    # Info panel
-    info_ax = plt.subplot2grid((5, 1), (4, 0))
-    info_ax.axis('off')
-
-    # Plot the price series
-    chart_ax.plot(window_dates, window_prices, marker='o', linestyle='-', color='black', alpha=0.7,
-                  label='Price Series', markersize=3)
-
-    # Get pattern info
-    if isinstance(result, list):
-        pattern = result[0]
-    else:
-        pattern = result
-
-    direction = pattern['direction']
-    status = pattern.get('status', 'unknown')
-    is_failed = status == 'failed'
-    move_pct = pattern.get('initial_move_pct', 0)
-    retrace_pct = pattern.get('retracement_pct', 0)
-
-    # Plot each point (A, B, C, D)
-    colors = {'A': 'black', 'B': 'red', 'C': ('darkred' if is_failed else 'green'), 'D': 'blue'}
-    markers = {'A': 'o', 'B': 's', 'C': ('X' if is_failed else '^'), 'D': 'd'}
-    sizes = {'A': 120, 'B': 120, 'C': 160 if is_failed else 120, 'D': 120}
-
-    for label in ['A', 'B', 'C', 'D']:
-        idx, price = pattern[label]
-
-        if idx < len(window_dates):
-            chart_ax.scatter(window_dates[idx], price, color=colors[label],
-                             marker=markers[label], s=sizes[label], zorder=4, edgecolors='black')
-
-            if is_failed and label == 'C':
-                chart_ax.text(window_dates[idx], price, f"{label} (FAILED)", fontsize=14,
-                              fontweight='bold', color='darkred', ha='right', va='bottom')
+import matplotlib.pyplot as plt
+import random
+
+
+class BearishFanExtensions:
+    def __init__(self):
+        self.fig = None
+        self.ax = None
+        self.original_abcd = None
+        self.fan_systems = []
+        self.failed_patterns = []
+        self.completed_patterns = []
+
+    def generate_bearish_fan_pattern(self, data_points=2000):
+        base_price = 50000
+        prices = []
+        x_values = list(range(data_points))
+
+        # Remove the crazy noise - just use flat base
+        for i in range(data_points):
+            prices.append(base_price)
+
+        self.original_abcd = self._create_bearish_abcd(prices, x_values, 200, 550)
+        fan_system1 = self._create_bearish_fan_extension_from_original(prices, x_values, 550, 1200, "Bear Fan S1")
+        fan_system2 = self._create_bearish_fan_with_retrace_support(prices, x_values, 1200, 1500, "Bear Fan S2")
+        fan_system3 = self._create_bearish_fan_with_break_remeasure(prices, x_values, 1500, 1900, "Bear Fan S3")
+        self.fan_systems = [fan_system1, fan_system2, fan_system3]
+
+        # Evaluate each fan system for failure/completion
+        self._evaluate_fan_patterns()
+
+        return {
+            'x_values': x_values,
+            'prices': prices,
+            'original_abcd': self.original_abcd,
+            'fan_systems': self.fan_systems,
+            'failed_patterns': self.failed_patterns,
+            'completed_patterns': self.completed_patterns
+        }
+
+    def _evaluate_fan_patterns(self):
+        """Evaluate each fan pattern for failure or completion status"""
+        self.failed_patterns = []
+        self.completed_patterns = []
+
+        for fan_system in self.fan_systems:
+            failure_info = self._check_fan_failure(fan_system)
+            if failure_info['failed']:
+                self.failed_patterns.append({
+                    'system': fan_system,
+                    'failure_info': failure_info
+                })
             else:
-                chart_ax.text(window_dates[idx], price, label, fontsize=14,
-                              fontweight='bold', color=colors[label], ha='right', va='bottom')
+                self.completed_patterns.append({
+                    'system': fan_system,
+                    'completion_info': self._get_completion_info(fan_system)
+                })
 
-    # Draw Fibonacci levels
-    draw_fibonacci_levels(chart_ax, window_prices, window_dates, pattern, direction, is_failed=is_failed)
+    def _check_fan_failure(self, fan_system):
+        """
+        Check if a bearish fan system has failed based on:
+        1. 88.6% is the failure point for each fan (upside break in downtrend)
+        2. ABCD pattern 38.2% level is the final brake of the fan system (upside break)
+        """
+        failure_info = {
+            'failed': False,
+            'failure_type': None,
+            'failure_level': None,
+            'failure_price': None,
+            'failure_point': None
+        }
 
-    # Connect points with lines
-    if is_failed:
-        x_points = [window_dates[pattern['A'][0]], window_dates[pattern['B'][0]],
-                    window_dates[pattern['C'][0]]]
-        y_points = [pattern['A'][1], pattern['B'][1], pattern['C'][1]]
-        chart_ax.plot(x_points, y_points, 'r--', linewidth=2, alpha=0.7)
-    else:
-        x_points = [window_dates[pattern['A'][0]], window_dates[pattern['B'][0]],
-                    window_dates[pattern['C'][0]], window_dates[pattern['D'][0]]]
-        y_points = [pattern['A'][1], pattern['B'][1], pattern['C'][1], pattern['D'][1]]
-        chart_ax.plot(x_points, y_points, 'g-', linewidth=2, alpha=0.7)
+        # Get the base move for calculating failure levels
+        if 'AB_move' in fan_system:
+            base_move = fan_system['AB_move']
+        else:
+            base_move = fan_system['original_AB_move']
 
-    # Set title and axis labels
-    title_text = f"Pattern {pattern_number} - {status.upper()} - {direction.upper()}TREND"
-    chart_ax.set_title(title_text, fontsize=16, fontweight='bold', color='darkred' if is_failed else 'darkgreen')
+        # Calculate failure levels for bearish patterns
+        if 's2_point' in fan_system:
+            # For bearish fan extensions, 88.6% failure level from S2 (upward break)
+            s2_price = fan_system['s2_point'][1]
+            s1_price = fan_system['s1_point'][1]
+            s1_s2_move = s1_price - s2_price  # Note: reversed for bearish
+            fan_886_failure = s2_price + s1_s2_move * 0.886  # Upward break in downtrend
 
-    chart_ax.set_xlabel('Date', fontsize=12)
-    chart_ax.set_ylabel('Price', fontsize=12)
-    chart_ax.grid(True, alpha=0.3)
-    chart_ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    chart_ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            # Check if price broke above 88.6% level (failure in bearish)
+            if 'failure_point' in fan_system:
+                failure_price = fan_system['failure_point'][1]
+                if failure_price > fan_886_failure:
+                    failure_info['failed'] = True
+                    failure_info['failure_type'] = 'Bearish Fan 88.6% Break'
+                    failure_info['failure_level'] = '88.6%'
+                    failure_info['failure_price'] = failure_price
+                    failure_info['failure_point'] = fan_system['failure_point']
 
-    # Information Panel
-    info_text = f"PATTERN #{pattern_number} ANALYSIS\n\n"
-    info_text += f"Type: {direction.upper()}TREND\n"
-    info_text += f"Status: {status.upper()}\n"
-    info_text += f"Time Period: {window_info['start_date'].strftime('%Y-%m-%d')} to {window_info['end_date'].strftime('%Y-%m-%d')}\n\n"
+        # Check for ABCD 38.2% level break (final brake) - upward break in bearish
+        original_abcd_382 = self.original_abcd['points']['B'][1] + self.original_abcd['AB_move'] * 0.382
 
-    # Add point information
-    info_text += "KEY POINTS:\n"
-    for label in ['A', 'B', 'C', 'D']:
-        idx, price = pattern[label]
-        if idx < len(window_dates):
-            point_date = window_dates[idx].strftime('%Y-%m-%d %H:%M')
-            info_text += f"• Point {label}: Price ${price:.2f} on {point_date}\n"
+        if 'final_break_point' in fan_system:
+            final_break_price = fan_system['final_break_point'][1]
+            if final_break_price > original_abcd_382:
+                failure_info['failed'] = True
+                failure_info['failure_type'] = 'Bearish ABCD 38.2% Final Break'
+                failure_info['failure_level'] = 'ABCD 38.2%'
+                failure_info['failure_price'] = final_break_price
+                failure_info['failure_point'] = fan_system['final_break_point']
 
-    # Add price movement information
-    info_text += f"\nINITIAL MOVE: {move_pct:.2f}%\n"
-    info_text += f"RETRACEMENT: {retrace_pct:.2f}%\n"
+        return failure_info
 
-    # Add Fibonacci levels
-    A_price, B_price = pattern['A'][1], pattern['B'][1]
-    main_move = B_price - A_price if direction == "up" else A_price - B_price
+    def _get_completion_info(self, fan_system):
+        """Get completion information for successful bearish fan patterns"""
+        completion_info = {
+            'completion_level': fan_system.get('completion_level', 'Unknown'),
+            'completion_point': fan_system.get('completion_point', None),
+            'lowest_extension': None
+        }
 
-    info_text += "\nKEY FIBONACCI LEVELS:\n"
-    for level in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0, 1.618]:
-        fib_price = B_price - (main_move * level) if direction == "up" else B_price + (main_move * level)
-        info_text += f"• {level * 100:.1f}%: ${fib_price:.2f}\n"
+        if 'new_s3_point' in fan_system:
+            completion_info['lowest_extension'] = fan_system['new_s3_point']
 
-    # Add custom levels
-    if 'failure_level' in pattern:
-        info_text += f"• 76.4% Failure level: ${pattern['failure_level']:.2f}\n"
-    if 'completion_level' in pattern:
-        info_text += f"• -23.6% Completion level: ${pattern['completion_level']:.2f}\n"
-    if 'target_level' in pattern:
-        info_text += f"• 50% Target level: ${pattern['target_level']:.2f}\n"
+        return completion_info
 
-    # Add analysis summary
-    info_text += f"\nANALYSIS SUMMARY:\n{analysis}\n"
+    def _create_bearish_abcd(self, prices, x_values, start_idx, end_idx):
+        A_idx = start_idx + 80  # 280
+        B_idx = start_idx + 180  # 380
+        C_idx = start_idx + 280  # 480
+        D_idx = end_idx  # 550
 
-    # Add trends
-    trend_str = ", ".join([f"{k}: {v}" for k, v in trends.items()])
-    info_text += f"\nTRENDS: {trend_str}"
+        A_price = 55000  # Higher starting point for bearish
+        B_price = 45000  # Lower trough
+        AB = A_price - B_price  # 10000 - bearish move down
+        C_price = B_price + AB * 0.5  # 45000 + 10000 * 0.5 = 50000
+        D_price = C_price - AB  # 50000 - 10000 = 40000
 
-    # Display the info text
-    info_ax.text(0.01, 0.99, info_text, fontsize=11, va='top', family='monospace')
+        # D completes at -23.6% level (below B which is 0% in bearish)
+        d_completion_price = B_price - AB * 0.236  # 45000 - 10000 * 0.236 = 42640
+        prices[D_idx] = d_completion_price
 
-    # Adjust layout
-    plt.tight_layout()
-    fig.subplots_adjust(hspace=0.2)
+        prices[A_idx] = A_price
+        prices[B_idx] = B_price
+        prices[C_idx] = C_price
 
-    return fig
+        self._smooth_transition(prices, A_idx, B_idx, A_price, B_price)
+        self._smooth_transition(prices, B_idx, C_idx, B_price, C_price)
+        self._smooth_transition(prices, C_idx, D_idx, C_price, d_completion_price)
+
+        reversal_length = 50
+        reversal_slope = (prices[D_idx] - prices[C_idx]) / reversal_length * 0.5
+
+        for i in range(D_idx + 1, min(D_idx + reversal_length + 1, len(prices))):
+            progress = (i - D_idx) / reversal_length
+            prices[i] = prices[D_idx] - reversal_slope * progress
+            # Remove the random noise here
+
+        for i in range(D_idx + reversal_length + 1, len(prices)):
+            prices[i] = prices[i - 1]
+            # Remove the random noise here too
+
+        AB_move = A_price - B_price  # Bearish move
+
+        # Fixed Fibonacci levels for bearish - B is now 0%, D is -23.6%
+        fib_levels = {
+            '100%': A_price,  # A at 100%
+            '50%': C_price,  # C at 50%
+            '0%': B_price,  # B at 0%
+            '-23.6%': d_completion_price,  # D at -23.6%
+            '+38.2%': B_price + AB_move * 0.382  # ABCD 38.2% failure level (upward)
+        }
+
+        return {
+            'name': 'Bearish ABCD',
+            'color': 'purple',
+            'points': {'A': (A_idx, A_price), 'B': (B_idx, B_price),
+                       'C': (C_idx, C_price), 'D': (D_idx, d_completion_price)},
+            'AB_move': AB_move,
+            'fib_levels': fib_levels,
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'failure_levels': {
+                'abcd_382': B_price + AB_move * 0.382  # Upward break
+            }
+        }
+
+    def _create_bearish_fan_extension_from_original(self, prices, x_values, start_idx, end_idx, system_name):
+        original_D_price = self.original_abcd['points']['D'][1]
+        original_AB_move = self.original_abcd['AB_move']
+        D_idx = self.original_abcd['points']['D'][0]
+        B_price = self.original_abcd['points']['B'][1]
+
+        # S1 at positive 38.2% level (up from B in bearish)
+        s1_price = B_price + original_AB_move * 0.382  # 45000 + 10000 * 0.382 = 48820
+        s1_idx = D_idx + 80  # 630
+        prices[s1_idx] = s1_price
+
+        # S2: Lowest price after S1 (in bearish trend)
+        s2_price = 40000  # Lower for bearish moves
+        s2_idx = s1_idx + 80  # 710
+        prices[s2_idx] = s2_price
+
+        # S1-S2 move (bearish)
+        s1_s2_move = s1_price - s2_price  # Bearish move down
+
+        # Calculate failure levels for bearish
+        fan_886_failure = s2_price + s1_s2_move * 0.886  # 88.6% failure level (upward break)
+        abcd_382_failure = self.original_abcd['failure_levels']['abcd_382']
+
+        # New Fibonacci levels for bearish S1-S2
+        fan_levels = {
+            'S1 (100%)': s1_price,
+            'S2 (0%)': s2_price,
+            '38.2%': s2_price + s1_s2_move * 0.382,  # Upward retracement
+            '78.6%': s2_price + s1_s2_move * 0.786,  # Upward retracement
+            '88.6%': fan_886_failure,  # Fan failure level (upward)
+            '161.8%': s1_price - s1_s2_move * 1.618  # Downward extension
+        }
+
+        # S3 at 38.2% retracement of S1-S2 (upward)
+        s3_price = fan_levels['38.2%']
+        s3_idx = s2_idx + 80  # 790
+        prices[s3_idx] = s3_price
+
+        # New S3 at 161.8% of S1-S2 (downward extension)
+        new_s3_price = fan_levels['161.8%']
+        new_s3_idx = s3_idx + 80  # 870
+        prices[new_s3_idx] = new_s3_price
+
+        # First failure: Break above 88.6% level (bullish break in bearish trend)
+        failure_price = fan_886_failure + 1000  # Above 88.6% level - failure in bearish
+        failure_idx = new_s3_idx + 80  # 950
+        prices[failure_idx] = failure_price
+
+        # Recovery attempt (back down in bearish)
+        recovery_price = 38000  # Lower recovery in bearish
+        recovery_idx = failure_idx + 80  # 1030
+        prices[recovery_idx] = recovery_price
+
+        # Final break: ABCD 38.2% level break (upward break)
+        final_price = abcd_382_failure + 500  # Break ABCD 38.2% upward (final brake)
+        final_idx = recovery_idx + 80  # 1110
+        prices[final_idx] = final_price
+
+        final2_price = 60000  # Much higher final price (failed bearish)
+        final2_idx = final_idx + 10  # 1120
+        prices[final2_idx] = final2_price
+
+        # Smooth transitions
+        self._smooth_transition(prices, D_idx, s1_idx, original_D_price, s1_price)
+        self._smooth_transition(prices, s1_idx, s2_idx, s1_price, s2_price)
+        self._smooth_transition(prices, s2_idx, s3_idx, s2_price, s3_price)
+        self._smooth_transition(prices, s3_idx, new_s3_idx, s3_price, new_s3_price)
+        self._smooth_transition(prices, new_s3_idx, failure_idx, new_s3_price, failure_price)
+        self._smooth_transition(prices, failure_idx, recovery_idx, failure_price, recovery_price)
+        self._smooth_transition(prices, recovery_idx, final_idx, recovery_price, final_price)
+        self._smooth_transition(prices, final_idx, final2_idx, final_price, final2_price)
+        self._smooth_transition(prices, final2_idx, end_idx, final2_price, prices[end_idx])
+
+        return {
+            'name': system_name,
+            'color': 'green',
+            'fan_levels': fan_levels,
+            'original_AB_move': original_AB_move,
+            'AB_move': s1_s2_move,
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'completion_level': '161.8%',
+            'completion_point': (new_s3_idx, new_s3_price),
+            's1_point': (s1_idx, s1_price),
+            's2_point': (s2_idx, s2_price),
+            's3_point': (s3_idx, s3_price),
+            'new_s3_point': (new_s3_idx, new_s3_price),
+            'failure_point': (failure_idx, failure_price),  # This breaks 88.6% upward
+            'recovery_point': (recovery_idx, recovery_price),
+            'final_break_point': (final_idx, final_price),
+            'failure_levels': {
+                'fan_886': fan_886_failure,
+                'abcd_382': abcd_382_failure
+            },
+            'is_fan_extension': True
+        }
+
+    def _create_bearish_fan_with_retrace_support(self, prices, x_values, start_idx, end_idx, system_name):
+        original_AB_move = self.original_abcd['AB_move']
+        # Use B price as reference (0% level)
+        original_B_price = self.original_abcd['points']['B'][1]
+
+        fan_levels = {
+            'B (0%)': original_B_price,
+            '-23.6%': original_B_price - original_AB_move * 0.236,
+            '-38.2%': original_B_price - original_AB_move * 0.382,
+            '-50%': original_B_price - original_AB_move * 0.5,
+            '-61.8%': original_B_price - original_AB_move * 0.618,
+            '-78.6%': original_B_price - original_AB_move * 0.786,
+            '+88.6%': original_B_price + original_AB_move * 0.886,  # Fan failure level (upward)
+            '-100%': original_B_price - original_AB_move * 1.0,
+            '-161.8%': original_B_price - original_AB_move * 1.618,
+            '-261.8%': original_B_price - original_AB_move * 2.618,
+            '-423.6%': original_B_price - original_AB_move * 4.236
+        }
+
+        phase1_end = start_idx + int((end_idx - start_idx) * 0.4)
+        start_price = fan_levels['-61.8%']
+        target_price1 = fan_levels['-78.6%'] - 2000  # Lower targets in bearish
+        self._smooth_transition(prices, start_idx, phase1_end, start_price, target_price1)
+
+        phase2_end = start_idx + int((end_idx - start_idx) * 0.7)
+        support_price = fan_levels['-38.2%'] - 1000  # Lower support in bearish
+        self._smooth_transition(prices, phase1_end, phase2_end, target_price1, support_price)
+
+        final_target = fan_levels['-161.8%'] - 3000  # Much lower final target
+        self._smooth_transition(prices, phase2_end, end_idx, support_price, final_target)
+
+        return {
+            'name': system_name,
+            'color': 'blue',
+            'fan_levels': fan_levels,
+            'original_AB_move': original_AB_move,
+            'AB_move': original_AB_move,
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'support_retest': (phase2_end, support_price),
+            'completion_level': '161.8%',
+            'completion_point': (end_idx, final_target),
+            'failure_levels': {
+                'fan_886': fan_levels['+88.6%'],
+                'abcd_382': self.original_abcd['failure_levels']['abcd_382']
+            },
+            'is_fan_extension': True
+        }
+
+    def _create_bearish_fan_with_break_remeasure(self, prices, x_values, start_idx, end_idx, system_name):
+        original_AB_move = self.original_abcd['AB_move']
+        # Use B price as reference (0% level)
+        original_B_price = self.original_abcd['points']['B'][1]
+        original_fan_382 = original_B_price - original_AB_move * 0.382
+
+        break_idx = start_idx + int((end_idx - start_idx) * 0.2)
+        start_price = original_B_price - original_AB_move * 1.618
+        break_price = original_fan_382 * 1.015  # Small upward break
+        self._smooth_transition(prices, start_idx, break_idx, start_price, break_price)
+
+        support_idx = start_idx + int((end_idx - start_idx) * 0.4)
+        new_support_price = break_price * 1.002
+        self._smooth_transition(prices, break_idx, support_idx, break_price, new_support_price)
+
+        new_fan_levels = {
+            'New Support': new_support_price,
+            '-23.6%': new_support_price - original_AB_move * 0.236,
+            '-38.2%': new_support_price - original_AB_move * 0.382,
+            '-50%': new_support_price - original_AB_move * 0.5,
+            '-61.8%': new_support_price - original_AB_move * 0.618,
+            '-78.6%': new_support_price - original_AB_move * 0.786,
+            '+88.6%': new_support_price + original_AB_move * 0.886,  # Fan failure level (upward)
+            '-100%': new_support_price - original_AB_move * 1.0,
+            '-161.8%': new_support_price - original_AB_move * 1.618,
+            '-261.8%': new_support_price - original_AB_move * 2.618,
+            '-423.6%': new_support_price - original_AB_move * 4.236
+        }
+
+        resistance_idx = start_idx + int((end_idx - start_idx) * 0.7)
+        resistance_price = new_fan_levels['-61.8%'] - 1500  # Lower resistance in bearish
+        self._smooth_transition(prices, support_idx, resistance_idx, new_support_price, resistance_price)
+
+        next_pattern_target = new_fan_levels['-100%'] - 2000  # Much lower target
+        self._smooth_transition(prices, resistance_idx, end_idx, resistance_price, next_pattern_target)
+
+        return {
+            'name': system_name,
+            'color': 'red',
+            'fan_levels': new_fan_levels,
+            'original_fan_levels': {
+                'B (0%)': original_B_price,
+                '-38.2%': original_fan_382
+            },
+            'original_AB_move': original_AB_move,
+            'AB_move': original_AB_move,
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'break_point': (break_idx, break_price),
+            'new_support': (support_idx, new_support_price),
+            'resistance_point': (resistance_idx, resistance_price),
+            'completion_point': (end_idx, next_pattern_target),
+            'completion_level': '100%',
+            'failure_levels': {
+                'fan_886': new_fan_levels['+88.6%'],
+                'abcd_382': self.original_abcd['failure_levels']['abcd_382']
+            },
+            'remeasured_from_support': True,
+            'is_fan_extension': True
+        }
+
+    def _smooth_transition(self, prices, start_idx, end_idx, start_price, end_price):
+        if start_idx >= end_idx or start_idx >= len(prices) or end_idx >= len(prices):
+            return
+        for i in range(start_idx, end_idx + 1):
+            if i >= len(prices):
+                break
+            progress = (i - start_idx) / (end_idx - start_idx) if end_idx != start_idx else 0
+            prices[i] = start_price + (end_price - start_price) * progress
+
+    def plot_bearish_fan_extensions(self, data):
+        self.fig, self.ax = plt.subplots(figsize=(28, 16))
+        self.ax.plot(data['x_values'], data['prices'],
+                     color='black', linewidth=1.5, alpha=0.8, label='Price')
+        zone_colors = ['#FFE6FF', '#FFE6E6', '#E6F0FF', '#E6FFE6']
+
+        original = data['original_abcd']
+        self.ax.axvspan(original['start_idx'], original['end_idx'],
+                        color=zone_colors[0], alpha=0.3, zorder=0)
+
+        for i, fan_system in enumerate(data['fan_systems']):
+            zone_color = zone_colors[i + 1]
+            self.ax.axvspan(fan_system['start_idx'], fan_system['end_idx'],
+                            color=zone_color, alpha=0.3, zorder=0)
+
+        self._plot_bearish_abcd(data['original_abcd'])
+        for fan_system in data['fan_systems']:
+            self._plot_bearish_fan_system(fan_system)
+        self._plot_bearish_failure_levels(data)
+        self._add_comprehensive_info_box(data)
+
+        self.ax.set_title('Bearish Cascading Fan Extensions - Downtrend',
+                          fontsize=16, fontweight='bold', pad=20)
+        self.ax.set_xlabel('Time Index', fontsize=12)
+        self.ax.set_ylabel('Price', fontsize=12)
+        self.ax.grid(True, alpha=0.3, linestyle='--')
+
+        # Simple legend - just the main systems
+        self.ax.plot([], [], color='purple', label='Bearish ABCD')
+        for fan_system in data['fan_systems']:
+            self.ax.plot([], [], color=fan_system['color'], label=fan_system['name'])
+
+        self.ax.legend(loc='upper right', fontsize=10)  # Upper right for bearish
+        plt.tight_layout()
+        plt.show()
+        return self.fig, self.ax
+
+    def _plot_bearish_failure_levels(self, data):
+        """Plot bearish failure levels"""
+        # Only show ABCD 38.2% failure level (upward break) - no annotations
+        abcd_382_failure = data['original_abcd']['failure_levels']['abcd_382']
+        self.ax.axhline(y=abcd_382_failure, color='darkred', linestyle=':',
+                        alpha=0.8, linewidth=2)
+
+    def _plot_bearish_abcd(self, original_abcd):
+        color = original_abcd['color']
+        point_markers = {'A': 'o', 'B': 's', 'C': '^', 'D': 'd'}
+        for label, (idx, price) in original_abcd['points'].items():
+            self.ax.scatter(idx, price, color=color, marker=point_markers[label],
+                            s=150, zorder=5, edgecolors='black', linewidth=2)
+            self.ax.annotate(f'{label}', (idx, price),
+                             xytext=(5, 15), textcoords='offset points',
+                             fontsize=12, fontweight='bold', color=color)
+        abcd_x = [original_abcd['points'][p][0] for p in ['A', 'B', 'C', 'D']]
+        abcd_y = [original_abcd['points'][p][1] for p in ['A', 'B', 'C', 'D']]
+        self.ax.plot(abcd_x, abcd_y, color=color, linewidth=4, alpha=0.8,
+                     linestyle='-', label='Bearish ABCD Pattern')
+
+        # Show ABCD 38.2% failure level (upward break)
+        abcd_382_failure = original_abcd['failure_levels']['abcd_382']
+        self.ax.axhline(y=abcd_382_failure, color='darkred', linestyle=':',
+                        alpha=0.8, linewidth=3)
+
+    def _plot_bearish_fan_system(self, fan_system):
+        color = fan_system['color']
+        annotation_offset = 20
+
+        if 's1_point' in fan_system:
+            s1_idx, s1_price = fan_system['s1_point']
+            self.ax.scatter(s1_idx, s1_price, color=color, marker='o',
+                            s=200, zorder=6, edgecolors='black', linewidth=2)
+            self.ax.annotate('S1', (s1_idx, s1_price), xytext=(5, annotation_offset),
+                             textcoords='offset points', fontsize=14, color=color, fontweight='bold',
+                             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor=color))
+        if 's2_point' in fan_system:
+            s2_idx, s2_price = fan_system['s2_point']
+            self.ax.scatter(s2_idx, s2_price, color=color, marker='s',
+                            s=200, zorder=6, edgecolors='black', linewidth=2)
+            self.ax.annotate('S2', (s2_idx, s2_price), xytext=(5, annotation_offset),
+                             textcoords='offset points', fontsize=14, color=color, fontweight='bold',
+                             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor=color))
+        if 's3_point' in fan_system:
+            s3_idx, s3_price = fan_system['s3_point']
+            self.ax.scatter(s3_idx, s3_price, color=color, marker='^',
+                            s=200, zorder=6, edgecolors='black', linewidth=2)
+            self.ax.annotate('S3', (s3_idx, s3_price), xytext=(5, annotation_offset),
+                             textcoords='offset points', fontsize=14, color=color, fontweight='bold',
+                             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor=color))
+        if 'new_s3_point' in fan_system:
+            new_s3_idx, new_s3_price = fan_system['new_s3_point']
+            self.ax.scatter(new_s3_idx, new_s3_price, color=color, marker='d',
+                            s=200, zorder=6, edgecolors='black', linewidth=2)
+            self.ax.annotate('New S3\n(161.8%)', (new_s3_idx, new_s3_price), xytext=(5, annotation_offset),
+                             textcoords='offset points', fontsize=12, color=color, fontweight='bold',
+                             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor=color))
+        if 'failure_point' in fan_system:
+            failure_idx, failure_price = fan_system['failure_point']
+            self.ax.scatter(failure_idx, failure_price, color='red', marker='X',
+                            s=300, zorder=8, edgecolors='black', linewidth=3)
+            self.ax.annotate('88.6%\nFAILURE', (failure_idx, failure_price), xytext=(10, annotation_offset + 15),
+                             textcoords='offset points', fontsize=12, color='red', fontweight='bold',
+                             bbox=dict(boxstyle='round,pad=0.4', facecolor='pink', alpha=0.9, edgecolor='red'))
+        if 'recovery_point' in fan_system:
+            recovery_idx, recovery_price = fan_system['recovery_point']
+            self.ax.scatter(recovery_idx, recovery_price, color=color, marker='v',
+                            s=200, zorder=6, edgecolors='black', linewidth=2)
+            self.ax.annotate('Recovery', (recovery_idx, recovery_price), xytext=(5, -annotation_offset - 10),
+                             textcoords='offset points', fontsize=12, color=color, fontweight='bold',
+                             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor=color))
+        if 'final_break_point' in fan_system:
+            final_idx, final_price = fan_system['final_break_point']
+            self.ax.scatter(final_idx, final_price, color='darkred', marker='X',
+                            s=350, zorder=9, edgecolors='black', linewidth=3)
+            self.ax.annotate('ABCD 38.2%\nFINAL BREAK', (final_idx, final_price), xytext=(10, annotation_offset + 20),
+                             textcoords='offset points', fontsize=12, color='darkred', fontweight='bold',
+                             bbox=dict(boxstyle='round,pad=0.4', facecolor='mistyrose', alpha=0.9, edgecolor='darkred'))
+
+    def _add_comprehensive_info_box(self, data):
+        # Set y-axis limits to focus on the action
+        self.ax.set_ylim(25000, 65000)  # Range for bearish patterns
+
+    def save_bearish_pattern_analysis(self, data, filename="bearish_fan_pattern_analysis.txt"):
+        """Save detailed analysis of failed and completed bearish patterns to file"""
+        with open(filename, 'w') as f:
+            f.write("🎯 BEARISH FAN EXTENSIONS PATTERN ANALYSIS\n")
+            f.write("=" * 50 + "\n\n")
+
+            # Original ABCD info
+            original = data['original_abcd']
+            f.write(f"📋 ORIGINAL BEARISH ABCD PATTERN:\n")
+            f.write(f"   AB Move: {original['AB_move']:.0f} points (bearish)\n")
+            f.write(f"   A: ${original['points']['A'][1]:.0f} (100%)\n")
+            f.write(f"   B: ${original['points']['B'][1]:.0f} (0%)\n")
+            f.write(f"   C: ${original['points']['C'][1]:.0f} (50%)\n")
+            f.write(f"   D: ${original['points']['D'][1]:.0f} (-23.6%)\n")
+            f.write(f"   ABCD 38.2% Failure Level: ${original['failure_levels']['abcd_382']:.0f} (upward break)\n\n")
+
+            # Failed patterns
+            f.write(f"❌ FAILED BEARISH PATTERNS ({len(data['failed_patterns'])}):\n")
+            f.write("-" * 30 + "\n")
+            for failed in data['failed_patterns']:
+                system = failed['system']
+                failure_info = failed['failure_info']
+                f.write(f"System: {system['name']}\n")
+                f.write(f"Failure Type: {failure_info['failure_type']}\n")
+                f.write(f"Failure Level: {failure_info['failure_level']}\n")
+                f.write(f"Failure Price: ${failure_info['failure_price']:.0f}\n")
+                f.write(f"Time Index: {failure_info['failure_point'][0]}\n")
+
+                if 'failure_levels' in system:
+                    f.write(f"88.6% Level: ${system['failure_levels']['fan_886']:.0f} (upward break)\n")
+                    f.write(f"ABCD 38.2% Level: ${system['failure_levels']['abcd_382']:.0f} (upward break)\n")
+                f.write("\n")
+
+            # Completed patterns
+            f.write(f"✅ COMPLETED BEARISH PATTERNS ({len(data['completed_patterns'])}):\n")
+            f.write("-" * 30 + "\n")
+            for completed in data['completed_patterns']:
+                system = completed['system']
+                completion_info = completed['completion_info']
+                f.write(f"System: {system['name']}\n")
+                f.write(f"Completion Level: {completion_info['completion_level']}\n")
+                if completion_info['completion_point']:
+                    f.write(f"Completion Price: ${completion_info['completion_point'][1]:.0f}\n")
+                    f.write(f"Time Index: {completion_info['completion_point'][0]}\n")
+
+                if 'failure_levels' in system:
+                    f.write(f"88.6% Level: ${system['failure_levels']['fan_886']:.0f} (upward break)\n")
+                    f.write(f"ABCD 38.2% Level: ${system['failure_levels']['abcd_382']:.0f} (upward break)\n")
+                f.write("\n")
+
+            # Summary statistics
+            total_systems = len(data['fan_systems'])
+            failed_count = len(data['failed_patterns'])
+            completed_count = len(data['completed_patterns'])
+
+            f.write(f"📊 SUMMARY STATISTICS:\n")
+            f.write("-" * 20 + "\n")
+            f.write(f"Total Bearish Fan Systems: {total_systems}\n")
+            f.write(f"Failed Systems: {failed_count}\n")
+            f.write(f"Completed Systems: {completed_count}\n")
+            f.write(f"Success Rate: {(completed_count / total_systems * 100):.1f}%\n")
+            f.write(f"Failure Rate: {(failed_count / total_systems * 100):.1f}%\n\n")
+
+            f.write(f"🚨 BEARISH FAILURE CRITERIA SUMMARY:\n")
+            f.write("-" * 25 + "\n")
+            f.write(f"1. 88.6% Level Break: Bearish fan system failure (upward break)\n")
+            f.write(f"2. ABCD 38.2% Level Break: Final bearish system failure (upward break)\n")
+            f.write(f"   ABCD 38.2% Price: ${original['failure_levels']['abcd_382']:.0f}\n")
+
+        print(f"💾 Bearish pattern analysis saved to: {filename}")
 
 
-def load_and_prepare_data(csv_file, date_range=None, index_range=None):
-    """
-    Load and prepare price data from CSV file.
-    """
-    # Read the CSV file with datetime parsing
-    df = pd.read_csv(csv_file)
+def main():
+    print("🎯 Generating BEARISH Fan Extensions with Failure Level Tracking...")
+    print("📊 Key Bearish Failure Criteria:")
+    print("   • 88.6% = Bearish fan failure level (upward break)")
+    print("   • ABCD 38.2% = Final brake of bearish fan system (upward break)")
 
-    # Check first few rows to understand the structure
-    print("First few rows of the CSV file:")
-    print(df.head(2))
+    analyzer = BearishFanExtensions()
+    data = analyzer.generate_bearish_fan_pattern()
 
-    # Detect timestamp column
-    if 'timestamp' in df.columns:
-        timestamp_col = 'timestamp'
-    else:
-        timestamp_col = df.columns[0]
+    # Generate the plot
+    fig, ax = analyzer.plot_bearish_fan_extensions(data)
 
-    print(f"Using column '{timestamp_col}' as timestamp")
+    # Save detailed analysis
+    analyzer.save_bearish_pattern_analysis(data)
 
-    # Parse timestamps
-    try:
-        print("Trying to parse timestamp with mixed format...")
-        df['timestamp'] = pd.to_datetime(df[timestamp_col], format='mixed')
-    except Exception as e:
-        print(f"Error parsing timestamp with mixed format: {e}")
-        try:
-            print("Trying to parse timestamp with auto-inferred format...")
-            df['timestamp'] = pd.to_datetime(df[timestamp_col])
-        except Exception as e:
-            print(f"Error with auto-inferred format: {e}")
-            print("Trying various common formats...")
+    # Print summary to console
+    print(f"\n📋 ORIGINAL BEARISH ABCD PATTERN:")
+    original = data['original_abcd']
+    print(f"   AB Move: {original['AB_move']:.0f} points (bearish)")
+    print(f"   A: ${original['points']['A'][1]:.0f} (100%)")
+    print(f"   B: ${original['points']['B'][1]:.0f} (0%)")
+    print(f"   C: ${original['points']['C'][1]:.0f} (50%)")
+    print(f"   D: ${original['points']['D'][1]:.0f} (-23.6%)")
+    print(f"   ABCD 38.2% Failure: ${original['failure_levels']['abcd_382']:.0f} (upward break)")
 
-            formats = [
-                '%m/%d/%Y %H:%M',
-                '%m/%d/%Y %H:%M:%S',
-                '%Y-%m-%d %H:%M:%S',
-                '%Y-%m-%d %H:%M',
-                '%Y/%m/%d %H:%M',
-                '%d/%m/%Y %H:%M',
-                '%d-%m-%Y %H:%M'
-            ]
+    print(f"\n🔄 BEARISH FAN SYSTEMS ANALYSIS:")
+    for failed in data['failed_patterns']:
+        system = failed['system']
+        failure_info = failed['failure_info']
+        print(f"\n   ❌ {system['name']}: FAILED")
+        print(f"      Type: {failure_info['failure_type']}")
+        print(f"      Level: {failure_info['failure_level']}")
+        print(f"      Price: ${failure_info['failure_price']:.0f}")
 
-            for fmt in formats:
-                try:
-                    print(f"Trying format: {fmt}")
-                    df['timestamp'] = pd.to_datetime(df[timestamp_col], format=fmt)
-                    print(f"Successfully parsed with format: {fmt}")
-                    break
-                except:
-                    continue
+    for completed in data['completed_patterns']:
+        system = completed['system']
+        completion_info = completed['completion_info']
+        print(f"\n   ✅ {system['name']}: COMPLETED")
+        print(f"      Level: {completion_info['completion_level']}")
+        if completion_info['completion_point']:
+            print(f"      Price: ${completion_info['completion_point'][1]:.0f}")
 
-            if 'timestamp' not in df.columns:
-                print("WARNING: Could not parse timestamps. Creating generic time index.")
-                df['timestamp'] = pd.date_range(start='2017-01-01', periods=len(df), freq='H')
+    # Summary statistics
+    total = len(data['fan_systems'])
+    failed = len(data['failed_patterns'])
+    completed = len(data['completed_patterns'])
 
-    # Filter by date range if provided
-    if date_range:
-        start_date, end_date = date_range
-        subset = df[(df['timestamp'] >= start_date) & (df['timestamp'] <= end_date)]
-        print(f"Filtered data by date range: {start_date} to {end_date}")
-    elif index_range:
-        start_idx, end_idx = index_range
-        end_idx = min(end_idx, len(df))
-        subset = df.iloc[start_idx:end_idx]
-        print(f"Filtered data by index range: {start_idx} to {end_idx}")
-    else:
-        subset = df
-        print(f"Using all data: {len(df)} rows")
-
-    # Extract prices and timestamps, dropping NaN values
-    clean_subset = subset.dropna(subset=["price"])
-
-    if len(clean_subset) < 5:
-        print("Warning: Not enough valid data points after filtering!")
-    else:
-        print(f"Working with {len(clean_subset)} data points")
-
-    prices = clean_subset["price"].tolist()
-    dates = clean_subset["timestamp"].tolist()
-
-    return prices, dates, df
+    print(f"\n📊 SUMMARY:")
+    print(f"   Total Systems: {total}")
+    print(f"   Failed: {failed}")
+    print(f"   Completed: {completed}")
+    print(f"   Success Rate: {(completed / total * 100):.1f}%")
 
 
+if __name__ == "__main__":
+    main()
