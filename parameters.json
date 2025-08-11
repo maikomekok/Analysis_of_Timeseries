@@ -1,6 +1,6 @@
 {
-    "min_change": 0.005,
-    "window_sizes": [50, 150, 300,450,600, 800],
+    "min_change": 0.001,
+    "window_sizes": [50, 150, 300,450,600, 800,1200],
     "overlap": 50,
     "top_patterns": 50,
     "time_window": 120,

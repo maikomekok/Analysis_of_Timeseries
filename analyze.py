@@ -5,6 +5,38 @@ import matplotlib.dates as mdates
 from datetime import datetime, timedelta
 
 
+def find_index_from_timestamp(dates, target_timestamp):
+    """
+    Find the index corresponding to a timestamp
+    """
+    try:
+        return dates.index(target_timestamp)
+    except ValueError:
+        # If exact match not found, find closest
+        import bisect
+
+        if isinstance(target_timestamp, str):
+            target_timestamp = pd.to_datetime(target_timestamp)
+
+        date_objects = [pd.to_datetime(d) if isinstance(d, str) else d for d in dates]
+        target_obj = pd.to_datetime(target_timestamp) if isinstance(target_timestamp, str) else target_timestamp
+
+        # Find closest timestamp
+        pos = bisect.bisect_left(date_objects, target_obj)
+        if pos == 0:
+            return 0
+        elif pos == len(date_objects):
+            return len(date_objects) - 1
+        else:
+            # Return the closest one
+            before = date_objects[pos - 1]
+            after = date_objects[pos]
+            if abs((target_obj - before).total_seconds()) < abs((after - target_obj).total_seconds()):
+                return pos - 1
+            else:
+                return pos
+
+
 def find_all_overlapping_patterns(prices, dates, min_change_pct=0.005, config=None):
     """
     Comprehensive pattern detection using your existing config system
@@ -98,15 +130,22 @@ def find_all_overlapping_patterns(prices, dates, min_change_pct=0.005, config=No
 def find_accurate_failure_point_global(pattern, prices, dates, config):
     """
     For failed patterns, search through entire dataset to find accurate failure point
+    FIXED to work with timestamps
     """
     if pattern.get('status') != 'failed':
         return pattern
 
     print(f"Finding accurate failure point for {pattern['direction']} pattern...")
 
-    A_idx, A_price = pattern['A']
-    B_idx, B_price = pattern['B']
-    C_idx, C_price = pattern['C']
+    # THESE ARE NOW TIMESTAMPS, NOT INDICES
+    A_timestamp, A_price = pattern['A']
+    B_timestamp, B_price = pattern['B']
+    C_timestamp, C_price = pattern['C']
+
+    # CONVERT TIMESTAMPS TO INDICES FOR PROCESSING
+    A_idx = find_index_from_timestamp(dates, A_timestamp)
+    B_idx = find_index_from_timestamp(dates, B_timestamp)
+    C_idx = find_index_from_timestamp(dates, C_timestamp)
 
     direction = pattern['direction']
     failure_level_pct = config.get('failure_level', 0.764)
@@ -122,7 +161,7 @@ def find_accurate_failure_point_global(pattern, prices, dates, config):
         search_condition = lambda price: price > failure_level
 
     # Search from C point onwards through ENTIRE dataset
-    search_start_idx = max(0, C_idx + 1)
+    search_start_idx = max(0, C_idx + 1)  # NOW THIS WILL WORK - C_idx is an integer
     actual_failure_idx = None
     actual_failure_price = None
 
@@ -136,11 +175,11 @@ def find_accurate_failure_point_global(pattern, prices, dates, config):
             print(f"  Found accurate failure at index {i}, price ${price:.2f}")
             break
 
-    # Update D point with accurate failure location
+    # Update D point with accurate failure location - STORE AS TIMESTAMP
     if actual_failure_idx is not None:
-        pattern['D'] = (actual_failure_idx, actual_failure_price)
+        pattern['D'] = (dates[actual_failure_idx], actual_failure_price)  # STORE TIMESTAMP
         pattern['accurate_failure_point'] = True
-        print(f"  Updated D point to accurate failure: index={actual_failure_idx}, price=${actual_failure_price:.2f}")
+        print(f"  Updated D point to accurate failure: timestamp={dates[actual_failure_idx]}, price=${actual_failure_price:.2f}")
     else:
         print(f"  No better failure point found beyond C, keeping original D point")
         pattern['accurate_failure_point'] = False
@@ -292,26 +331,26 @@ def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_chang
             else:
                 valid_D = (pattern_status == "failed") or (D_price < A_price)
 
-            if valid_D:
-                pattern = {
-                    "direction": direction,
-                    "A": (A_idx, A_price),
-                    "B": (B_idx, B_price),
-                    "C": (C_idx, C_price),
-                    "D": (D_idx, D_price),
-                    "initial_move_pct": move_pct,
-                    "retracement_pct": retracement_pct,
-                    "target_level": candidate['target_C_price'],
-                    "failure_level": failure_level_price,
-                    "completion_level": completion_level_price,
-                    "status": pattern_status,
-                    "pattern_rank": i + 1,
-                    "pattern_type": "comprehensive",
-                    "A_type": "absolute" if A_idx in [prices.index(min(prices)),
-                                                      prices.index(max(prices))] else "local",
-                    "searched_full_dataset": True
-                }
-
+            if pattern_status in ['completed', 'failed'] and D_price is not None:
+                if valid_D:
+                    pattern = {
+                        "direction": direction,
+                        "A": (dates[A_idx], A_price),  # NEW: timestamp-based
+                        "B": (dates[B_idx], B_price),  # NEW: timestamp-based
+                        "C": (dates[C_idx], C_price),  # NEW: timestamp-based
+                        "D": (dates[D_idx], D_price),  # NEW: timestamp-based
+                        "initial_move_pct": move_pct,
+                        "retracement_pct": retracement_pct,
+                        "target_level": candidate['target_C_price'],
+                        "failure_level": failure_level_price,
+                        "completion_level": completion_level_price,
+                        "status": pattern_status,
+                        "pattern_rank": i + 1,
+                        "pattern_type": "comprehensive",
+                        "A_type": "absolute" if A_idx in [prices.index(min(prices)),
+                                                          prices.index(max(prices))] else "local",
+                        "searched_full_dataset": True
+                    }
                 patterns.append(pattern)
 
                 print(f"    {direction.upper()} pattern created (rank #{i + 1}, {pattern_status}):")
@@ -323,13 +362,17 @@ def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_chang
 def find_opposite_overlapping_patterns(prices, dates, reference_pattern, min_change_pct, config):
     """
     For a completed pattern in one direction, look for failed patterns in opposite direction
-    Uses your existing config - no separate parameters
+    FIXED to work with timestamps
     """
     patterns = []
 
     ref_direction = reference_pattern['direction']
-    ref_A_idx = reference_pattern['A'][0]
-    ref_D_idx = reference_pattern['D'][0]
+
+    # THESE ARE NOW TIMESTAMPS - CONVERT TO INDICES
+    ref_A_timestamp = reference_pattern['A'][0]
+    ref_D_timestamp = reference_pattern['D'][0]
+    ref_A_idx = find_index_from_timestamp(dates, ref_A_timestamp)
+    ref_D_idx = find_index_from_timestamp(dates, ref_D_timestamp)
 
     opposite_direction = "down" if ref_direction == "up" else "up"
 
@@ -346,7 +389,11 @@ def find_opposite_overlapping_patterns(prices, dates, reference_pattern, min_cha
                     )
                     # Only keep patterns that overlap with reference pattern
                     for pattern in opposite_patterns:
-                        if pattern['D'][0] >= ref_A_idx and pattern['A'][0] <= ref_D_idx:
+                        # CONVERT PATTERN TIMESTAMPS TO INDICES FOR COMPARISON
+                        pattern_A_idx = find_index_from_timestamp(dates, pattern['A'][0])
+                        pattern_D_idx = find_index_from_timestamp(dates, pattern['D'][0])
+
+                        if pattern_D_idx >= ref_A_idx and pattern_A_idx <= ref_D_idx:
                             pattern['overlap_with'] = f"{ref_direction}_{reference_pattern['status']}"
                             patterns.append(pattern)
     else:
@@ -359,7 +406,11 @@ def find_opposite_overlapping_patterns(prices, dates, reference_pattern, min_cha
                     )
                     # Only keep patterns that overlap with reference pattern
                     for pattern in opposite_patterns:
-                        if pattern['D'][0] >= ref_A_idx and pattern['A'][0] <= ref_D_idx:
+                        # CONVERT PATTERN TIMESTAMPS TO INDICES FOR COMPARISON
+                        pattern_A_idx = find_index_from_timestamp(dates, pattern['A'][0])
+                        pattern_D_idx = find_index_from_timestamp(dates, pattern['D'][0])
+
+                        if pattern_D_idx >= ref_A_idx and pattern_A_idx <= ref_D_idx:
                             pattern['overlap_with'] = f"{ref_direction}_{reference_pattern['status']}"
                             patterns.append(pattern)
 
@@ -383,14 +434,17 @@ def find_significant_extremes(prices, min_change_threshold):
 
 
 def remove_duplicate_patterns(patterns):
-    """Remove duplicate patterns"""
+    """
+    Remove duplicate patterns - FIXED to work with timestamps
+    """
     unique_patterns = []
     seen_signatures = set()
 
     for pattern in patterns:
+        # CREATE SIGNATURE USING TIMESTAMPS (converted to strings for hashing)
         signature = (
-            pattern['A'][0], pattern['B'][0],
-            pattern['C'][0], pattern['D'][0],
+            str(pattern['A'][0]), str(pattern['B'][0]),
+            str(pattern['C'][0]), str(pattern['D'][0]),
             pattern['direction']
         )
 
@@ -399,7 +453,6 @@ def remove_duplicate_patterns(patterns):
             unique_patterns.append(pattern)
 
     return unique_patterns
-
 
 def calculate_pattern_significance(pattern):
     """Enhanced significance calculation"""
@@ -574,24 +627,22 @@ def analyze_multiple_windows(prices, dates, window_sizes=[50, 100, 200],
 def find_accurate_failure_point_in_window(pattern, full_prices, full_dates, window_info, config):
     """
     For windowed patterns, search beyond window boundary to find accurate failure point
+    FIXED to work with timestamps
     """
     if pattern.get('status') != 'failed':
         return pattern
 
     print(f"Finding accurate failure point for windowed {pattern['direction']} pattern...")
 
-    # Get window info
-    window_start = window_info['start_idx']
-    window_size = window_info['window_size']
+    # THESE ARE NOW TIMESTAMPS, NOT INDICES
+    A_timestamp, A_price = pattern['A']
+    B_timestamp, B_price = pattern['B']
+    C_timestamp, C_price = pattern['C']
 
-    # Convert window-local coordinates to global
-    A_local_idx, A_price = pattern['A']
-    B_local_idx, B_price = pattern['B']
-    C_local_idx, C_price = pattern['C']
-
-    global_A_idx = window_start + A_local_idx
-    global_B_idx = window_start + B_local_idx
-    global_C_idx = window_start + C_local_idx
+    # CONVERT TO GLOBAL INDICES
+    global_A_idx = find_index_from_timestamp(full_dates, A_timestamp)
+    global_B_idx = find_index_from_timestamp(full_dates, B_timestamp)
+    global_C_idx = find_index_from_timestamp(full_dates, C_timestamp)
 
     direction = pattern['direction']
     failure_level_pct = config.get('failure_level', 0.764)
@@ -607,12 +658,11 @@ def find_accurate_failure_point_in_window(pattern, full_prices, full_dates, wind
         search_condition = lambda price: price > failure_level
 
     # Search from C point onwards through ENTIRE dataset (beyond window)
-    search_start_idx = max(0, global_C_idx + 1)
+    search_start_idx = max(0, global_C_idx + 1)  # NOW THIS WILL WORK
     actual_failure_idx = None
     actual_failure_price = None
 
     print(f"  Searching from global index {search_start_idx} to {len(full_prices) - 1}")
-    print(f"  Window was [{window_start}:{window_start + window_size}]")
 
     for i in range(search_start_idx, len(full_prices)):
         price = full_prices[i]
@@ -622,14 +672,12 @@ def find_accurate_failure_point_in_window(pattern, full_prices, full_dates, wind
             print(f"  Found accurate failure at global index {i}, price ${price:.2f}")
             break
 
-    # Update D point with accurate failure location (convert back to window-local)
+    # Update D point with accurate failure location - STORE AS TIMESTAMP
     if actual_failure_idx is not None:
-        local_failure_idx = actual_failure_idx - window_start
-        pattern['D'] = (local_failure_idx, actual_failure_price)
+        pattern['D'] = (full_dates[actual_failure_idx], actual_failure_price)  # STORE TIMESTAMP
         pattern['accurate_failure_point'] = True
         pattern['searched_beyond_window'] = True
-        print(
-            f"  Updated D point: local_idx={local_failure_idx}, global_idx={actual_failure_idx}, price=${actual_failure_price:.2f}")
+        print(f"  Updated D point: timestamp={full_dates[actual_failure_idx]}, price=${actual_failure_price:.2f}")
     else:
         print(f"  No better failure point found beyond window, keeping original D point")
         pattern['accurate_failure_point'] = False
@@ -1016,8 +1064,13 @@ def display_results(prices, dates, result, analysis, trends):
                           'C': (color_set[2], pattern['C']), 'D': (color_set[3], pattern['D'])}
 
                 for label, (color, point) in points.items():
-                    idx, price = point
-
+                    if isinstance(point[0], (int, np.integer)):
+                        # Old format - index based
+                        idx, price = point
+                    else:
+                        # New format - timestamp based
+                        timestamp, price = point
+                        idx = find_index_from_timestamp(dates, timestamp)
                     if idx >= len(dates):
                         print(f"Warning: Point {label} of pattern {i + 1} has index {idx} outside range.")
                         idx = len(dates) - 1
