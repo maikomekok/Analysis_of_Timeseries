@@ -11,6 +11,669 @@ from analyze import (
 )
 import matplotlib.patheffects as pe
 
+def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
+                                                min_threshold_pct):
+    """
+    ENHANCED trailing strategy with fixed S point as first 50% retracement after final E
+    FIXED: Locks S to the first valid bounce after the final E
+    """
+    all_e_points = find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction,
+                                             min_threshold_pct)
+
+    if not all_e_points:
+        return {
+            'e_point': None,
+            'validation': {'valid_50_bounce': False, 'reason': 'No E points found'},
+            'candidate_number': 0,
+            'total_candidates_tested': 0,
+            'is_valid': False,
+            'pattern_completed': False,
+            'strategy': 'trailing_with_completion',
+            'trailing_attempts': []
+        }
+
+    trailing_attempts = []
+
+    for i, (initial_e_timestamp, initial_e_price) in enumerate(all_e_points):
+        f_price = fib_levels['38.2']
+        fe_move = initial_e_price - f_price
+        s_level = f_price + (fe_move * 0.5)
+
+        print(f"\n--- TRAILING ATTEMPT {i + 1}/{len(all_e_points)} ---")
+        print(f"Testing initial E: {initial_e_timestamp}, ${initial_e_price:.2f}")
+
+        validation = check_50_percent_bounce_after_e_correct(
+            prices, dates, initial_e_timestamp, initial_e_price, fib_levels, direction, min_threshold_pct
+        )
+
+        if validation['valid_50_bounce']:
+            print(f"\n🎯 Initial S BOUNCE FOUND! Finding ABSOLUTE {direction.upper()} extreme before bounce...")
+
+            bounce_timestamp = validation['bounce_point'][0]
+            bounce_price = validation['bounce_point'][1]
+            bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
+            d_idx = find_index_from_timestamp(dates, d_timestamp)
+
+            search_prices = prices[d_idx:bounce_idx + 1]
+            search_dates = dates[d_idx:bounce_idx + 1]
+
+            if direction == 'up':
+                max_price = max(search_prices)
+                max_idx = search_prices.index(max_price)
+                final_e_timestamp = search_dates[max_idx]
+                final_e_price = max_price
+                print(f"    ✨ ABSOLUTE HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+            elif direction == 'down':
+                min_price = min(search_prices)
+                min_idx = search_prices.index(min_price)
+                final_e_timestamp = search_dates[min_idx]
+                final_e_price = min_price
+                print(f"    ✨ ABSOLUTE LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+
+            # Re-validate S using the final E, but lock to the first bounce
+            final_validation = check_50_percent_bounce_after_e_correct(
+                prices, dates, final_e_timestamp, final_e_price, fib_levels, direction, min_threshold_pct
+            )
+
+            if not final_validation['valid_50_bounce']:
+                print(f"    ❌ No valid S bounce after final E")
+                attempt_record = {
+                    'candidate_number': i + 1,
+                    'e_point': (final_e_timestamp, final_e_price),
+                    'distance_from_d': abs(final_e_price - d_price),
+                    'fe_move': abs(final_e_price - f_price),
+                    's_level': s_level,
+                    'validation': final_validation,
+                    'completion': {'pattern_completed': False, 'reason': 'No S bounce after final E'},
+                    'found_bounce': False,
+                    'pattern_completed': False,
+                    'final_valid': False
+                }
+                trailing_attempts.append(attempt_record)
+                continue
+
+            final_bounce_timestamp = final_validation['bounce_point'][0]
+            final_bounce_price = final_validation['bounce_point'][1]
+            final_s_level = final_validation['s_level']
+            final_fe_move = abs(final_e_price - f_price)
+
+            tolerance = final_s_level * 0.0005
+            if abs(final_bounce_price - final_s_level) > tolerance:
+                print(f"    ❌ Bounce at ${final_bounce_price:.2f} not at final S: ${final_s_level:.2f}")
+                attempt_record = {
+                    'candidate_number': i + 1,
+                    'e_point': (final_e_timestamp, final_e_price),
+                    'distance_from_d': abs(final_e_price - d_price),
+                    'fe_move': final_fe_move,
+                    's_level': final_s_level,
+                    'validation': final_validation,
+                    'completion': {'pattern_completed': False, 'reason': 'Bounce not at final S level'},
+                    'found_bounce': True,
+                    'pattern_completed': False,
+                    'final_valid': False
+                }
+                trailing_attempts.append(attempt_record)
+                continue
+
+            print(f"    ✅ Fixed S bounce at final S: ${final_s_level:.2f} at {final_bounce_timestamp}")
+
+            completion_result = check_pattern_completion_236_extension(
+                prices, dates, final_bounce_timestamp, final_e_price, f_price, direction
+            )
+
+            print(f"    📊 FINAL CALCULATION:")
+            print(f"       F: ${f_price:.2f}")
+            print(f"       E: ${final_e_price:.2f}")
+            print(f"       S: ${final_s_level:.2f}")
+
+            if completion_result['pattern_completed']:
+                print(f"    🏆 PATTERN STATUS: VALID + COMPLETED!")
+            else:
+                print(f"    ✅ PATTERN STATUS: VALID (uncompleted)")
+
+            attempt_record = {
+                'candidate_number': i + 1,
+                'e_point': (final_e_timestamp, final_e_price),
+                'distance_from_d': abs(final_e_price - d_price),
+                'fe_move': final_fe_move,
+                's_level': final_s_level,
+                'validation': final_validation,
+                'completion': completion_result,
+                'found_bounce': True,
+                'pattern_completed': completion_result['pattern_completed'],
+                'final_valid': True
+            }
+            trailing_attempts.append(attempt_record)
+
+            return {
+                'e_point': (final_e_timestamp, final_e_price),
+                'validation': final_validation,
+                'completion': completion_result,
+                'candidate_number': i + 1,
+                'total_candidates_tested': i + 1,
+                'is_valid': True,
+                'pattern_completed': completion_result['pattern_completed'],
+                'distance_from_d': abs(final_e_price - d_price),
+                'strategy': 'trailing_with_completion',
+                'trailing_attempts': trailing_attempts,
+                'successful_attempt': i + 1
+            }
+        else:
+            print(f"    ❌ No initial S bounce found with this E candidate")
+            attempt_record = {
+                'candidate_number': i + 1,
+                'e_point': (initial_e_timestamp, initial_e_price),
+                'distance_from_d': abs(initial_e_price - d_price),
+                'fe_move': fe_move,
+                's_level': s_level,
+                'validation': validation,
+                'completion': {'pattern_completed': False, 'reason': 'No S bounce'},
+                'found_bounce': False,
+                'pattern_completed': False,
+                'final_valid': False
+            }
+            trailing_attempts.append(attempt_record)
+
+    return {
+        'e_point': all_e_points[-1] if all_e_points else None,
+        'validation': trailing_attempts[-1]['validation'] if trailing_attempts else {'valid_50_bounce': False,
+                                                                                     'reason': 'No E points found'},
+        'completion': {'pattern_completed': False, 'reason': 'No valid S bounce found'},
+        'candidate_number': len(all_e_points),
+        'total_candidates_tested': len(all_e_points),
+        'is_valid': False,
+        'pattern_completed': False,
+        'distance_from_d': abs(all_e_points[-1][1] - d_price) if all_e_points else 0,
+        'strategy': 'trailing_with_completion',
+        'trailing_attempts': trailing_attempts,
+        'successful_attempt': None
+    }
+def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.01, min_threshold_pct=1.0):
+    """
+    Analyze fan extension with completion detection (23.6% extension)
+    FIXED: Proper fe_move calculation and S level handling
+    """
+    # Calculate Fibonacci levels
+    fib_levels = calculate_fibonacci_levels(pattern)
+
+    # Get D point details
+    d_timestamp = pattern['D'][0]
+    d_price = pattern['D'][1]
+    direction = pattern.get('direction', 'unknown')
+
+    print(f"\n{'=' * 70}")
+    print(f"ANALYZING {direction.upper()} PATTERN - WITH COMPLETION DETECTION")
+    print(f"{'=' * 70}")
+    print(f"  D point: {d_timestamp}, ${d_price:.2f}")
+    print(f"  F point (38.2% level): ${fib_levels['38.2']:.2f}")
+    print(f"  Target: -23.6% extension for pattern completion")
+
+    # Determine search direction
+    analysis_key = None
+    if direction == 'down':
+        print(f"  🔍 Looking for LOWs (E) → S bounce → completion target")
+        analysis_key = 'lowest_after_d'
+    elif direction == 'up':
+        print(f"  🔍 Looking for HIGHs (E) → S bounce → completion target")
+        analysis_key = 'highest_after_d'
+    else:
+        print(f"  🔍 Unknown direction, defaulting to HIGH search")
+        analysis_key = 'highest_after_d'
+        direction = 'up'
+
+    # Use ENHANCED TRAILING STRATEGY with completion detection
+    e_result = find_valid_e_with_trailing_strategy_complete(
+        prices, dates, d_timestamp, d_price, fib_levels, direction, min_change, min_threshold_pct
+    )
+
+    # Build analysis results
+    analysis = {
+        'pattern': pattern,
+        'fibonacci_levels': fib_levels,
+        'retracement_382_level': fib_levels['38.2'],
+        'f_level': fib_levels['38.2'],
+        'd_timestamp': d_timestamp,
+        'd_price': d_price,
+        'pattern_direction': direction,
+        'min_threshold_pct': min_threshold_pct,
+        'min_distance_from_d': d_price * (min_threshold_pct / 100),
+        'is_valid': False,
+        'pattern_completed': False,
+        'calculation_method': 'Trailing E Point Strategy with 50% retracement and 23.6% completion detection',
+        'strategy': 'trailing_with_completion'
+    }
+
+    if e_result and e_result['is_valid']:
+        # Found valid E point
+        e_point = e_result['e_point']
+        e_timestamp, e_price = e_point
+
+        validation_info = e_result['validation']
+        completion_info = e_result.get('completion', {
+            'pattern_completed': False,
+            'reason': 'No completion data available'
+        })
+
+        # Get values from validation_info with safe defaults
+        s_level = validation_info.get('s_level', (e_price + fib_levels['38.2']) / 2)
+        f_price = validation_info.get('f_price', fib_levels['38.2'])
+        fe_move = validation_info.get('fe_move', abs(e_price - f_price))
+
+        analysis[analysis_key] = e_point
+        analysis['validation_info'] = validation_info
+        analysis['completion_info'] = completion_info
+        analysis['is_valid'] = True
+        analysis['pattern_completed'] = completion_info.get('pattern_completed', False)
+        analysis['s_level'] = s_level
+        analysis['f_price'] = f_price
+        analysis['fe_move'] = fe_move
+        analysis['distance_from_d'] = e_result['distance_from_d']
+        analysis['trailing_attempts'] = e_result['trailing_attempts']
+
+        # Calculate completion target
+        if direction == 'up':
+            # UPTREND: E is above F, target is further above E
+            fe_move_distance = e_price - f_price  # Should be positive
+            extension_236 = e_price + (fe_move_distance * 0.236)
+        elif direction == 'down':
+            # DOWNTREND: E is below F, target is further below E
+            fe_move_distance = f_price - e_price  # Should be positive
+            extension_236 = e_price - (fe_move_distance * 0.236)
+        else:
+            # Default uptrend
+            fe_move_distance = abs(e_price - f_price)
+            extension_236 = e_price + (fe_move_distance * 0.236)
+
+        analysis['completion_target'] = extension_236
+
+        print(f"\n🎯 PATTERN ANALYSIS COMPLETE!")
+        print(f"  ✅ Valid E point: ${e_price:.2f}")
+        print(f"  ✅ S bounce confirmed: ${validation_info['bounce_point'][1]:.2f}")
+        print(f"  🎯 Completion target (-23.6%): ${extension_236:.2f}")
+
+        if completion_info.get('pattern_completed', False):
+            print(f"  🏆 STATUS: VALID + COMPLETED!")
+            print(f"      Target: ${completion_info.get('target_price', 'N/A'):.2f}")
+            print(f"      Actual: ${completion_info.get('actual_price', 'N/A'):.2f}")
+            print(f"      Accuracy: ${completion_info.get('accuracy', 'N/A'):.2f}")
+        else:
+            print(f"  ⏳ STATUS: VALID (waiting for completion)")
+            print(f"      Still monitoring for target: ${extension_236:.2f}")
+
+    else:
+        # Strategy failed
+        analysis['validation_info'] = e_result.get('validation', {
+            'valid_50_bounce': False,
+            'reason': 'No validation data'
+        })
+        analysis['completion_info'] = e_result.get('completion', {
+            'pattern_completed': False,
+            'reason': 'No valid pattern found'
+        })
+        analysis['is_valid'] = False
+        analysis['pattern_completed'] = False
+        analysis['trailing_attempts'] = e_result.get('trailing_attempts', [])
+
+        print(f"\n❌ NO VALID PATTERN FOUND")
+
+    return analysis
+
+def find_valid_e_with_trailing_strategy(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
+                                        min_threshold_pct):
+    """
+    TRAILING E POINT STRATEGY: Find S bounce first, then use ABSOLUTE extreme before bounce as E
+    """
+    all_e_points = find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction,
+                                             min_threshold_pct)
+
+    if not all_e_points:
+        return {
+            'e_point': None,
+            'validation': {'valid_50_bounce': False, 'reason': 'No E points found'},
+            'candidate_number': 0,
+            'total_candidates_tested': 0,
+            'is_valid': False,
+            'strategy': 'trailing',
+            'trailing_attempts': []
+        }
+
+    trailing_attempts = []
+
+    for i, (initial_e_timestamp, initial_e_price) in enumerate(all_e_points):
+        f_price = fib_levels['38.2']
+        fe_move = initial_e_price - f_price
+        s_level = f_price + (fe_move * 0.5)
+
+        print(f"\n--- TRAILING ATTEMPT {i + 1}/{len(all_e_points)} ---")
+        print(f"Testing initial E: {initial_e_timestamp}, ${initial_e_price:.2f}")
+
+        validation = check_50_percent_bounce_after_e_correct(
+            prices, dates, initial_e_timestamp, initial_e_price, fib_levels, direction, min_threshold_pct
+        )
+
+        if validation['valid_50_bounce']:
+            print(f"\n🎯 S BOUNCE FOUND! Now finding ABSOLUTE {direction.upper()} extreme before bounce...")
+
+            bounce_timestamp = validation['bounce_point'][0]
+            bounce_price = validation['bounce_point'][1]
+            bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
+            d_idx = find_index_from_timestamp(dates, d_timestamp)
+
+            search_prices = prices[d_idx:bounce_idx + 1]
+            search_dates = dates[d_idx:bounce_idx + 1]
+
+            if direction == 'up':
+                max_price = max(search_prices)
+                max_idx = search_prices.index(max_price)
+                final_e_timestamp = search_dates[max_idx]
+                final_e_price = max_price
+                print(f"    ✨ ABSOLUTE HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+
+            elif direction == 'down':
+                min_price = min(search_prices)
+                min_idx = search_prices.index(min_price)
+                final_e_timestamp = search_dates[min_idx]
+                final_e_price = min_price
+                print(f"    ✨ ABSOLUTE LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+
+            final_fe_move = final_e_price - f_price
+            final_s_level = f_price + (final_fe_move * 0.5)
+
+            # Verify the bounce price is close to the FINAL S level
+            tolerance = final_s_level * 0.0002
+            if abs(bounce_price - final_s_level) > tolerance:
+                print(f"    ❌ Bounce at ${bounce_price:.2f} not at final S (50% of final F-E): ${final_s_level:.2f}")
+                print(f"      Difference: ${abs(bounce_price - final_s_level):.2f} > tolerance ${tolerance:.2f}")
+                attempt_record = {
+                    'candidate_number': i + 1,
+                    'e_point': (final_e_timestamp, final_e_price),
+                    'distance_from_d': abs(final_e_price - d_price),
+                    'fe_move': final_fe_move,
+                    's_level': final_s_level,
+                    'validation': validation,
+                    'found_bounce': True,
+                    'final_valid': False
+                }
+                trailing_attempts.append(attempt_record)
+                continue
+
+            print(f"    ✅ Bounce confirmed at final S (50% of final F-E move): ${final_s_level:.2f}")
+
+            print(f"    📊 FINAL CALCULATION:")
+            print(f"       F: ${f_price:.2f}")
+            print(f"       E (absolute extreme): ${final_e_price:.2f}")
+            print(f"       F-E move: ${final_fe_move:.2f}")
+            print(f"       S level: ${final_s_level:.2f}")
+
+            attempt_record = {
+                'candidate_number': i + 1,
+                'e_point': (final_e_timestamp, final_e_price),  # Use absolute extreme
+                'distance_from_d': abs(final_e_price - d_price),
+                'fe_move': final_fe_move,
+                's_level': final_s_level,
+                'validation': validation,
+                'found_bounce': True,
+                'final_valid': True
+            }
+            trailing_attempts.append(attempt_record)
+
+            return {
+                'e_point': (final_e_timestamp, final_e_price),
+                'validation': validation,
+                'candidate_number': i + 1,
+                'total_candidates_tested': i + 1,
+                'is_valid': True,
+                'distance_from_d': abs(final_e_price - d_price),
+                'strategy': 'trailing',
+                'trailing_attempts': trailing_attempts,
+                'successful_attempt': i + 1
+            }
+        else:
+            print(f"    ❌ No S bounce found with this E candidate")
+            attempt_record = {
+                'candidate_number': i + 1,
+                'e_point': (initial_e_timestamp, initial_e_price),
+                'distance_from_d': abs(initial_e_price - d_price),
+                'fe_move': fe_move,
+                's_level': s_level,
+                'validation': validation,
+                'found_bounce': False,
+                'final_valid': False
+            }
+            trailing_attempts.append(attempt_record)
+
+    # No valid pattern found
+    return {
+        'e_point': all_e_points[-1] if all_e_points else None,
+        'validation': trailing_attempts[-1]['validation'] if trailing_attempts else {'valid_50_bounce': False,
+                                                                                     'reason': 'No E points found'},
+        'candidate_number': len(all_e_points),
+        'total_candidates_tested': len(all_e_points),
+        'is_valid': False,
+        'distance_from_d': abs(all_e_points[-1][1] - d_price) if all_e_points else 0,
+        'strategy': 'trailing',
+        'trailing_attempts': trailing_attempts,
+        'successful_attempt': None
+    }
+def plot_pattern_with_completion_analysis(analysis, prices, dates, min_change=0.01):
+    """
+    Professional visualization showing F-E-S pattern with completion target
+    UPDATED: Reflects T as the extreme price reaching the -23.6% target
+    """
+    pattern = analysis['pattern']
+    direction = pattern.get('direction', 'unknown')
+
+    # Classic professional setup
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(22, 12))
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('#FAFAFA')
+
+    # Get display range
+    pattern_indices = []
+    for point in ['A', 'B', 'C', 'D']:
+        timestamp, price = pattern[point]
+        idx = find_index_from_timestamp(dates, timestamp)
+        pattern_indices.append(idx)
+
+    min_pattern_idx = min(pattern_indices)
+    max_pattern_idx = max(pattern_indices)
+
+    # Include final E point in display range
+    final_e_point = None
+    if analysis.get('lowest_after_d'):
+        final_e_point = analysis['lowest_after_d']
+    elif analysis.get('highest_after_d'):
+        final_e_point = analysis['highest_after_d']
+
+    if final_e_point:
+        e_idx = find_index_from_timestamp(dates, final_e_point[0])
+        max_display_idx = max(max_pattern_idx, e_idx + 250)
+    else:
+        max_display_idx = max_pattern_idx
+
+    # Calculate display range with padding
+    pattern_range = max_pattern_idx - min_pattern_idx
+    padding = max(100, int(pattern_range * 0.7))
+    start_idx = max(0, min_pattern_idx - padding)
+    end_idx = min(len(prices) - 1, max_display_idx + padding)
+
+    # Plot price data
+    subset_prices = prices[start_idx:end_idx + 1]
+    subset_dates = dates[start_idx:end_idx + 1]
+    ax.plot(subset_dates, subset_prices, color='#1f77b4', linewidth=2, label='Price', zorder=1)
+
+    # Pattern points A, B, C, D
+    points = ['A', 'B', 'C', 'D']
+    point_colors = {'A': '#2F2F2F', 'B': '#D62728', 'C': '#FF7F0E', 'D': '#1f77b4'}
+
+    for point in points:
+        timestamp, price = pattern[point]
+        color = point_colors[point]
+        ax.plot(timestamp, price, 'o', color=color, markersize=12, zorder=10,
+                markeredgecolor='white', markeredgewidth=2)
+        ax.text(timestamp, price, point, ha='center', va='center', fontsize=12,
+                fontweight='bold', color='white', zorder=15)
+
+    # Draw pattern lines
+    for i in range(len(points) - 1):
+        timestamp1, price1 = pattern[points[i]]
+        timestamp2, price2 = pattern[points[i + 1]]
+        ax.plot([timestamp1, timestamp2], [price1, price2], color='#666666',
+                linewidth=2, alpha=0.8, zorder=4)
+
+    # F level and point
+    f_price = analysis.get('f_price', analysis['retracement_382_level'])
+    d_timestamp = pattern['D'][0]
+
+    ax.axhline(y=f_price, color='#2CA02C', linestyle='--', linewidth=3, alpha=0.8, zorder=3)
+    ax.plot(d_timestamp, f_price, 's', color='#2CA02C', markersize=16, zorder=15,
+            markeredgecolor='white', markeredgewidth=3)
+    ax.text(d_timestamp, f_price, 'F', ha='center', va='center', fontsize=14,
+            fontweight='black', color='white', zorder=16,
+            path_effects=[pe.withStroke(linewidth=3, foreground='#1B5E1F')])
+
+    # S level
+    if analysis.get('s_level') and final_e_point:
+        s_level = analysis['s_level']
+        ax.axhline(y=s_level, color='#9467BD', linewidth=4, alpha=0.9, zorder=3)
+
+    # COMPLETION TARGET LINE (T point target)
+    if analysis.get('completion_target'):
+        target_price = analysis['completion_target']
+        ax.axhline(y=target_price, color='#FF6B35', linestyle=':', linewidth=3, alpha=0.9, zorder=3)
+
+    # Plot E point
+    if final_e_point:
+        e_timestamp, e_price = final_e_point
+        ax.plot(e_timestamp, e_price, 'D', color='#228B22', markersize=18, zorder=15,
+                markeredgecolor='white', markeredgewidth=3)
+        ax.text(e_timestamp, e_price, 'E', ha='center', va='center', fontsize=16,
+                fontweight='black', color='white', zorder=16,
+                path_effects=[pe.withStroke(linewidth=4, foreground='#006400')])
+
+    # S bounce point
+    validation_info = analysis.get('validation_info', {})
+    if validation_info.get('bounce_point') and analysis.get('s_level'):
+        bounce_timestamp, bounce_price = validation_info['bounce_point']
+        s_level = analysis['s_level']
+        ax.plot(bounce_timestamp, bounce_price, '*', color='#DC143C', markersize=20, zorder=20,
+                markeredgecolor='white', markeredgewidth=3)
+        ax.text(bounce_timestamp, bounce_price, 'S', ha='center', va='center', fontsize=18,
+                fontweight='black', color='white', zorder=21,
+                path_effects=[pe.withStroke(linewidth=4, foreground='#8B0000')])
+
+    # T point (completion extreme)
+    completion_info = analysis.get('completion_info', {})
+    if completion_info.get('pattern_completed') and completion_info.get('completion_point'):
+        comp_timestamp, comp_price = completion_info['completion_point']
+
+        # Ensure timestamp is pandas datetime (same as your x-axis)
+        comp_timestamp = pd.to_datetime(comp_timestamp)
+
+        ax.plot(comp_timestamp, comp_price, '*', color='#FFD700', markersize=24, zorder=22,
+                markeredgecolor='white', markeredgewidth=3)
+        ax.text(comp_timestamp, comp_price, 'T', ha='center', va='center', fontsize=18,
+                fontweight='black', color='white', zorder=23,
+                path_effects=[pe.withStroke(linewidth=4, foreground='#B8860B')])
+
+    # Draw F-E connection line
+    if analysis.get('is_valid', False) and final_e_point:
+        ax.plot([d_timestamp, final_e_point[0]], [f_price, final_e_point[1]],
+                color='#17BECF', linewidth=3, alpha=0.8, linestyle='--', zorder=8)
+
+    # Enhanced legend
+    legend_elements = [
+        plt.Line2D([0], [0], color='#1f77b4', linewidth=2, label='Price'),
+        plt.Line2D([0], [0], color='#2CA02C', linestyle='--', linewidth=3, label=f'F Level (100%): ${f_price:.0f}'),
+    ]
+
+    if analysis.get('s_level'):
+        s_level = analysis['s_level']
+        legend_elements.append(
+            plt.Line2D([0], [0], color='#9467BD', linewidth=4, label=f'S Level (50% of F-E): ${s_level:.0f}')
+        )
+
+    if analysis.get('completion_target'):
+        target_price = analysis['completion_target']
+        legend_elements.append(
+            plt.Line2D([0], [0], color='#FF6B35', linestyle=':', linewidth=3,
+                       label=f'Target (-23.6%): ${target_price:.0f}')
+        )
+
+    if analysis.get('is_valid', False) and final_e_point:
+        e_to_f_distance = abs(final_e_point[1] - f_price)
+        legend_elements.append(
+            plt.Line2D([0], [0], color='#17BECF', linestyle='--', linewidth=3,
+                       label=f'E-F Distance: ${e_to_f_distance:.0f}')
+        )
+
+    legend = ax.legend(handles=legend_elements, loc='upper left', framealpha=0.95,
+                       fontsize=11, facecolor='white', edgecolor='gray')
+    legend.get_frame().set_linewidth(1)
+
+    # Format chart
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    fig.autofmt_xdate()
+
+    ax.set_xlabel('Time', fontsize=12, fontweight='bold', color='#333333')
+    ax.set_ylabel('Price ($)', fontsize=12, fontweight='bold', color='#333333')
+
+    # Enhanced title with completion status
+    pattern_completed = analysis.get('pattern_completed', False)
+
+    if analysis.get('is_valid', False):
+        if pattern_completed:
+            title = f'🏆 {direction.upper()} Pattern - COMPLETED\nF-E-S-T Pattern (T at -23.6% extension)'
+            title_color = '#FFD700'  # Gold for completed
+        else:
+            title = f'✅ {direction.upper()} Pattern - VALID (Uncompleted)\nF-E-S Pattern Confirmed, Awaiting T'
+            title_color = '#2CA02C'  # Green for valid
+    else:
+        title = f'❌ {direction.upper()} Pattern - INVALID\nNo Valid F-E-S Pattern Found'
+        title_color = '#D62728'  # Red for invalid
+
+    ax.text(0.5, 0.98, title, transform=ax.transAxes, fontsize=14, fontweight='bold',
+            ha='center', va='top', color=title_color)
+
+    # Professional grid
+    ax.grid(True, which='major', linestyle='-', alpha=0.3, color='#CCCCCC')
+    ax.grid(True, which='minor', linestyle=':', alpha=0.1, color='#DDDDDD')
+
+    # Clean axes styling
+    for spine in ax.spines.values():
+        spine.set_color('#888888')
+        spine.set_linewidth(1)
+
+    ax.tick_params(colors='#333333', which='both')
+
+    plt.tight_layout()
+    plt.show()
+
+    # Enhanced console output
+    print("=" * 70)
+    if analysis.get('is_valid', False):
+        if pattern_completed:
+            print("🏆 PATTERN STATUS: VALID + COMPLETED")
+            comp_info = analysis['completion_info']
+            print(f"  ✅ E Point: ${final_e_point[1]:.2f}")
+            s_level = analysis.get('s_level', 0)
+            print(f"  ✅ S Bounce (50% of F-E): ${s_level:.2f}")
+            print(f"  🎯 T Target (-23.6%): ${comp_info['target_price']:.2f}")
+            print(f"  🏆 T Point (Extreme): ${comp_info['actual_price']:.2f}")
+            print(f"  📊 Accuracy: ${comp_info['accuracy']:.2f}")
+        else:
+            print("✅ PATTERN STATUS: VALID (UNCOMPLETED)")
+            print(f"  ✅ E Point: ${final_e_point[1]:.2f}")
+            s_level = analysis.get('s_level', 0)
+            print(f"  ✅ S Bounce (50% of F-E): ${s_level:.2f}")
+            print(f"  ⏳ T Target (-23.6%): ${analysis['completion_target']:.2f}")
+            print(f"  📈 Status: Monitoring for completion")
+    else:
+        print("❌ PATTERN STATUS: INVALID")
+        print(f"  🔍 No valid F-E-S pattern found")
+    print("=" * 70)
 
 def find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction, min_threshold_pct=1.0):
     """
@@ -78,63 +741,6 @@ def find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, d
     print(f"  Found {len(e_points)} potential E points after D (meeting both change and distance criteria)")
     return e_points
 
-
-def find_valid_e_with_50_bounce_correct(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
-                                        min_threshold_pct):
-    """
-    Find the first E point that has a valid S bounce (50% of F-E move)
-    UPDATED: Uses the new distance-checking E point finder
-    """
-    # Get all potential E points with minimum distance requirement
-    all_e_points = find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction, min_threshold_pct)
-
-    if not all_e_points:
-        print(f"  No potential E points found meeting distance requirement")
-        return None
-
-    print(f"\n  Searching through {len(all_e_points)} potential E points for valid S bounce (50% of F-E)...")
-
-    # Test each E point until we find one with valid S bounce
-    for i, (e_timestamp, e_price) in enumerate(all_e_points):
-        f_price = fib_levels['38.2']
-        fe_move = e_price - f_price
-        s_level = f_price + (fe_move * 0.5)
-
-        print(f"\n  Testing E candidate {i + 1}/{len(all_e_points)}: {e_timestamp}, ${e_price:.2f}")
-        print(f"    Distance from D: ${abs(e_price - d_price):.2f}")
-        print(f"    F-E move: ${fe_move:.2f}, S level: ${s_level:.2f}")
-
-        # Check if this E point has valid S bounce
-        validation = check_50_percent_bounce_after_e_correct(
-            prices, dates, e_timestamp, e_price, fib_levels, direction, min_threshold_pct
-        )
-
-        if validation['valid_50_bounce']:
-            print(f"    ✓ FOUND VALID E POINT with S bounce: {e_timestamp}, ${e_price:.2f}")
-            print(f"      Distance from D: ${abs(e_price - d_price):.2f} (meets min requirement)")
-            return {
-                'e_point': (e_timestamp, e_price),
-                'validation': validation,
-                'candidate_number': i + 1,
-                'total_candidates_tested': i + 1,
-                'is_valid': True,
-                'distance_from_d': abs(e_price - d_price)
-            }
-        else:
-            print(f"    ✗ E candidate {i + 1} invalid: {validation['reason']}")
-
-    # No valid E point found
-    print(f"\n  ✗ NO VALID E POINT with S bounce found after testing {len(all_e_points)} candidates")
-
-    return {
-        'e_point': all_e_points[-1] if all_e_points else None,
-        'validation': validation if 'validation' in locals() else {'valid_50_bounce': False,
-                                                                   'reason': 'No E points found meeting distance requirement'},
-        'candidate_number': len(all_e_points),
-        'total_candidates_tested': len(all_e_points),
-        'is_valid': False,
-        'distance_from_d': abs(all_e_points[-1][1] - d_price) if all_e_points else 0
-    }
 def find_index_from_timestamp(dates, target_timestamp):
     """Find the index corresponding to a timestamp"""
     try:
@@ -249,917 +855,155 @@ def find_lowest_after_d(prices, dates, d_timestamp, d_price, min_change):
             return (dates[i], current_price)
     return None
 
-
-def check_50_percent_bounce_after_e_correct(prices, dates, e_timestamp, e_price, fib_levels, direction,
-                                            min_threshold_pct):
+def check_50_percent_bounce_after_e_correct(prices, dates, e_timestamp, e_price, fib_levels, direction, min_threshold_pct):
     """
-    Check if price bounces on 50% level after E point
-    UPDATED: Now verifies ACTUAL BOUNCE BEHAVIOR, not just price touch
-
-    Args:
-        prices: Price array
-        dates: Dates array
-        e_timestamp: Timestamp of point E (new high/low)
-        e_price: Price at point E
-        fib_levels: Fibonacci levels dictionary (contains F = 38.2% level)
-        direction: 'up' or 'down'
-        min_threshold_pct: Minimum threshold from parameters
-
-    Returns:
-        dict: Validation result
+    Check for the FIRST valid 50% retracement (S point) immediately after E.
+    S is strictly defined as the midpoint between E and F.
+    The very first touch of S (within tolerance) after E is accepted as the bounce.
     """
     e_idx = find_index_from_timestamp(dates, e_timestamp)
 
-    # Search all remaining data after E
+    # If E is the last point in data, fail early
     if e_idx >= len(prices) - 1:
         return {
             'valid_50_bounce': False,
             'reason': 'E point at end of data'
         }
 
-    remaining_prices = prices[e_idx + 1:]
-    remaining_dates = dates[e_idx + 1:]
-
-    # F point = 38.2% level of AB
+    # F = 38.2% level
     f_price = fib_levels['38.2']
 
-    # Calculate 50% of F-E move
-    fe_move = e_price - f_price  # Move from F to E
-    s_level = f_price + (fe_move * 0.5)  # 50% of F-E move
-
-    min_threshold = e_price * (min_threshold_pct / 100)
-
-    print(f"\n  Checking 50% bounce after E (F-E move calculation):")
-    print(f"    F (38.2% level): ${f_price:.2f}")
-    print(f"    E (new {('high' if direction == 'up' else 'low')}): ${e_price:.2f}")
-    print(f"    F-E move: ${fe_move:.2f}")
-    print(f"    S (50% of F-E): ${s_level:.2f}")
-    print(f"    Min threshold: {min_threshold_pct}% = ${min_threshold:.2f}")
-
-    # STEP 1: Check if minimum threshold is crossed from E
-    threshold_crossed = False
-    threshold_idx = None
-    threshold_point = None
-
+    # S = 50% retracement from E back toward F
     if direction == 'up':
-        # After E (high), look for drop by min_threshold_pct
-        threshold_price = e_price - min_threshold
-        for i, price in enumerate(remaining_prices):
-            if price < threshold_price:
-                threshold_crossed = True
-                threshold_idx = i
-                threshold_point = (remaining_dates[i], price)
-                print(f"    ✓ Threshold crossed at {remaining_dates[i]}, ${price:.2f}")
-                break
+        s_level = e_price - ((e_price - f_price) * 0.5)
     elif direction == 'down':
-        # After E (low), look for rise by min_threshold_pct
-        threshold_price = e_price + min_threshold
-        for i, price in enumerate(remaining_prices):
-            if price > threshold_price:
-                threshold_crossed = True
-                threshold_idx = i
-                threshold_point = (remaining_dates[i], price)
-                print(f"    ✓ Threshold crossed at {remaining_dates[i]}, ${price:.2f}")
-                break
+        s_level = e_price + ((f_price - e_price) * 0.5)
+    else:
+        s_level = (e_price + f_price) / 2
 
-    if not threshold_crossed:
-        print(f"    ✗ Threshold not crossed")
-        return {
-            'valid_50_bounce': False,
-            'reason': f'Price did not move {min_threshold_pct}% from E',
-            'threshold_pct': min_threshold_pct,
-            's_level': s_level,
-            'f_price': f_price,
-            'fe_move': fe_move
-        }
+    tolerance = s_level * 0.0002  # 0.02% tolerance
 
-    # STEP 2: Look for ACTUAL BOUNCE at S level (50% of F-E move)
-    tolerance = s_level * 0.0002  # 0.02% tolerance for S level
+    print(f"\n  Checking 50% retracement after E:")
+    print(f"    F (38.2% level): ${f_price:.2f}")
+    print(f"    E: ${e_price:.2f}")
+    print(f"    S (50% retracement): ${s_level:.2f}")
+    print(f"    Tolerance: ±${tolerance:.2f}")
 
-    search_prices = remaining_prices[threshold_idx:]
-    search_dates = remaining_dates[threshold_idx:]
-
-    print(f"    🔍 Searching for ACTUAL BOUNCE at S level ${s_level:.2f} (tolerance: {tolerance:.2f})")
-
-    for i, price in enumerate(search_prices):
+    # Look for the FIRST touch of S after E
+    for i, price in enumerate(prices[e_idx+1:], start=e_idx+1):
         if abs(price - s_level) <= tolerance:
-            print(f"    📍 Found price touch at S level: ${price:.2f} at {search_dates[i]}")
+            bounce_timestamp = dates[i]
+            bounce_point = (bounce_timestamp, price)
+            print(f"    🎯 FIRST VALID S bounce at {bounce_timestamp}, ${price:.2f}")
+            return {
+                'valid_50_bounce': True,
+                'reason': 'First S touch found immediately after E',
+                'bounce_point': bounce_point,
+                's_level': s_level,
+                'f_price': f_price,
+                'e_price': e_price,
+                'fe_move': abs(e_price - f_price),
+                'direction': direction
+            }
 
-            # CRITICAL: Verify ACTUAL BOUNCE BEHAVIOR
-            bounce_confirmed = False
-            bounce_strength = 0
-
-            # Need at least 4 more data points to confirm bounce
-            if i + 4 < len(search_prices):
-                s_touch_price = price
-                next_prices = search_prices[i + 1:i + 5]  # Next 4 prices after S touch
-
-                print(f"    🔄 Verifying bounce behavior...")
-                print(f"       S touch price: ${s_touch_price:.2f}")
-                print(f"       Next 4 prices: {[f'${p:.2f}' for p in next_prices]}")
-
-                if direction == 'up':
-                    # UPTREND: After E (high) drops to S level, it should bounce UP (away from F level)
-                    # S level is between F and E, so bouncing UP means moving toward E direction
-                    prices_above_s = [p for p in next_prices if p > s_touch_price]
-                    bounce_strength = len(prices_above_s)
-
-                    if bounce_strength >= 3:  # At least 3 out of 4 prices above S touch
-                        bounce_confirmed = True
-                        print(f"    ✅ UPTREND BOUNCE CONFIRMED: {bounce_strength}/4 prices above S touch")
-                    else:
-                        print(f"    ❌ UPTREND bounce failed: Only {bounce_strength}/4 prices above S touch")
-
-                elif direction == 'down':
-                    # DOWNTREND: After E (low) rises to S level, it should bounce DOWN (away from F level)
-                    # S level is between E and F, so bouncing DOWN means moving toward E direction
-                    prices_below_s = [p for p in next_prices if p < s_touch_price]
-                    bounce_strength = len(prices_below_s)
-
-                    if bounce_strength >= 3:  # At least 3 out of 4 prices below S touch
-                        bounce_confirmed = True
-                        print(f"    ✅ DOWNTREND BOUNCE CONFIRMED: {bounce_strength}/4 prices below S touch")
-                    else:
-                        print(f"    ❌ DOWNTREND bounce failed: Only {bounce_strength}/4 prices below S touch")
-            else:
-                print(f"    ⚠️  Not enough data points after S touch to verify bounce")
-
-            if bounce_confirmed:
-                bounce_timestamp = search_dates[i]
-                bounce_point = (bounce_timestamp, price)
-                print(f"    🎯 REAL 50% BOUNCE FOUND at S level!")
-                print(f"       Bounce point: {bounce_timestamp}, ${price:.2f}")
-                print(f"       S level target: ${s_level:.2f}")
-                print(f"       Bounce strength: {bounce_strength}/4 confirming prices")
-
-                return {
-                    'valid_50_bounce': True,
-                    'reason': f'Threshold crossed and ACTUAL bounce confirmed at S (50% of F-E move)',
-                    'bounce_point': bounce_point,
-                    'threshold_point': threshold_point,
-                    'threshold_pct': min_threshold_pct,
-                    's_level': s_level,
-                    'f_price': f_price,
-                    'fe_move': fe_move,
-                    'bounce_strength': bounce_strength,
-                    'direction': direction
-                }
-            else:
-                print(f"    ⏭️  Price touched S but no bounce confirmed, continuing search...")
-                # Continue searching for other potential bounce points
-                continue
-
-    print(f"    ❌ No ACTUAL bounce found at S level")
-    print(f"       Searched {len(search_prices)} prices after threshold cross")
-    print(f"       Looking for bounce near S = ${s_level:.2f} with tolerance ${tolerance:.2f}")
-
+    # If no bounce found
+    print(f"    ❌ No bounce found at S level")
     return {
         'valid_50_bounce': False,
-        'reason': 'Threshold crossed but no ACTUAL bounce confirmed at S (50% of F-E move)',
-        'threshold_point': threshold_point,
-        'threshold_pct': min_threshold_pct,
+        'reason': 'No bounce found at 50% retracement',
         's_level': s_level,
         'f_price': f_price,
-        'fe_move': fe_move,
-        'bounce_strength': 0,
+        'e_price': e_price,
+        'fe_move': abs(e_price - f_price),
         'direction': direction
     }
 
 
-def find_valid_e_with_trailing_strategy(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
-                                        min_threshold_pct):
+def check_pattern_completion_236_extension(prices, dates, bounce_timestamp, e_price, f_price, direction):
     """
-    TRAILING E POINT STRATEGY: Find S bounce first, then use ABSOLUTE extreme before bounce as E
+    Check for pattern completion at -23.6% extension from E.
+    T point = the FIRST time price reaches the -23.6% extension target after S bounce.
     """
-    # Get all potential E points
-    all_e_points = find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction,
-                                             min_threshold_pct)
+    bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
 
-    if not all_e_points:
-        return {
-            'e_point': None,
-            'validation': {'valid_50_bounce': False, 'reason': 'No E points found'},
-            'candidate_number': 0,
-            'total_candidates_tested': 0,
-            'is_valid': False,
-            'strategy': 'trailing',
-            'trailing_attempts': []
-        }
-
-    trailing_attempts = []
-
-    # Test each E point for S bounce
-    for i, (initial_e_timestamp, initial_e_price) in enumerate(all_e_points):
-        f_price = fib_levels['38.2']
-        fe_move = initial_e_price - f_price
-        s_level = f_price + (fe_move * 0.5)
-
-        print(f"\n--- TRAILING ATTEMPT {i + 1}/{len(all_e_points)} ---")
-        print(f"Testing initial E: {initial_e_timestamp}, ${initial_e_price:.2f}")
-
-        # Check for S bounce using initial E
-        validation = check_50_percent_bounce_after_e_correct(
-            prices, dates, initial_e_timestamp, initial_e_price, fib_levels, direction, min_threshold_pct
-        )
-
-        if validation['valid_50_bounce']:
-            print(f"\n🎯 S BOUNCE FOUND! Now finding ABSOLUTE {direction.upper()} extreme before bounce...")
-
-            # Get bounce point
-            bounce_timestamp = validation['bounce_point'][0]
-            bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
-            d_idx = find_index_from_timestamp(dates, d_timestamp)
-
-            # Find ABSOLUTE extreme between D and bounce point
-            search_prices = prices[d_idx:bounce_idx + 1]
-            search_dates = dates[d_idx:bounce_idx + 1]
-
-            if direction == 'up':
-                # Find ABSOLUTE HIGHEST before bounce
-                max_price = max(search_prices)
-                max_idx = search_prices.index(max_price)
-                final_e_timestamp = search_dates[max_idx]
-                final_e_price = max_price
-                print(f"    ✨ ABSOLUTE HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
-
-            elif direction == 'down':
-                # Find ABSOLUTE LOWEST before bounce
-                min_price = min(search_prices)
-                min_idx = search_prices.index(min_price)
-                final_e_timestamp = search_dates[min_idx]
-                final_e_price = min_price
-                print(f"    ✨ ABSOLUTE LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
-
-            # Recalculate everything with the ABSOLUTE extreme
-            final_fe_move = final_e_price - f_price
-            final_s_level = f_price + (final_fe_move * 0.5)
-
-            print(f"    📊 FINAL CALCULATION:")
-            print(f"       F: ${f_price:.2f}")
-            print(f"       E (absolute extreme): ${final_e_price:.2f}")
-            print(f"       F-E move: ${final_fe_move:.2f}")
-            print(f"       S level: ${final_s_level:.2f}")
-
-            attempt_record = {
-                'candidate_number': i + 1,
-                'e_point': (final_e_timestamp, final_e_price),  # Use absolute extreme
-                'distance_from_d': abs(final_e_price - d_price),
-                'fe_move': final_fe_move,
-                's_level': final_s_level,
-                'validation': validation,
-                'found_bounce': True
-            }
-            trailing_attempts.append(attempt_record)
-
-            return {
-                'e_point': (final_e_timestamp, final_e_price),
-                'validation': validation,
-                'candidate_number': i + 1,
-                'total_candidates_tested': i + 1,
-                'is_valid': True,
-                'distance_from_d': abs(final_e_price - d_price),
-                'strategy': 'trailing',
-                'trailing_attempts': trailing_attempts,
-                'successful_attempt': i + 1
-            }
-        else:
-            print(f"    ❌ No S bounce found with this E candidate")
-            attempt_record = {
-                'candidate_number': i + 1,
-                'e_point': (initial_e_timestamp, initial_e_price),
-                'distance_from_d': abs(initial_e_price - d_price),
-                'fe_move': fe_move,
-                's_level': s_level,
-                'validation': validation,
-                'found_bounce': False
-            }
-            trailing_attempts.append(attempt_record)
-
-    # No valid pattern found
-    # No valid pattern found
-    return {
-        'e_point': all_e_points[-1] if all_e_points else None,
-        'validation': trailing_attempts[-1]['validation'] if trailing_attempts else {'valid_50_bounce': False,
-                                                                                     'reason': 'No E points found'},
-        'candidate_number': len(all_e_points),
-        'total_candidates_tested': len(all_e_points),
-        'is_valid': False,
-        'distance_from_d': abs(all_e_points[-1][1] - d_price) if all_e_points else 0,  # ADD THIS LINE
-        'strategy': 'trailing',
-        'trailing_attempts': trailing_attempts,
-        'successful_attempt': None
-    }
-
-
-def check_pattern_completion_236_extension(prices, dates, s_bounce_timestamp, s_bounce_price, f_price, e_price,
-                                           direction):
-    """
-    FIXED: Correct -23.6% extension calculation
-
-    UPTREND Logic:
-    - F = 38.2% level (LOWER than E)
-    - E = New HIGH (ABOVE F)
-    - Target = E + 23.6% of (E-F) distance = HIGHER than E
-
-    DOWNTREND Logic:
-    - F = 38.2% level (HIGHER than E)
-    - E = New LOW (BELOW F)
-    - Target = E - 23.6% of (F-E) distance = LOWER than E
-    """
-    s_idx = find_index_from_timestamp(dates, s_bounce_timestamp)
-
-    if s_idx >= len(prices) - 1:
+    if bounce_idx >= len(prices) - 1:
         return {
             'pattern_completed': False,
             'reason': 'S bounce at end of data'
         }
 
-    # Calculate extension target based on ACTUAL pattern direction
+    # Calculate extension target
     if direction == 'up':
-        # UPTREND: E is HIGH, F is lower, target should be ABOVE E
-        fe_move_distance = e_price - f_price  # Positive: E > F
-        extension_236 = e_price + (fe_move_distance * 0.236)  # Target ABOVE E
-
+        fe_move_distance = e_price - f_price  # Positive
+        extension_236 = e_price + (fe_move_distance * 0.236)
         print(f"\n  🎯 UPTREND Completion Calculation:")
-        print(f"    F (38.2% level): ${f_price:.2f}")
-        print(f"    E (HIGH): ${e_price:.2f}")
-        print(f"    E-F move: ${fe_move_distance:.2f}")
-        print(f"    Target (E + 23.6%): ${extension_236:.2f} (ABOVE E)")
-
+        print(f"    F (100%): ${f_price:.2f}")
+        print(f"    E (0%): ${e_price:.2f}")
+        print(f"    Target (-23.6%): ${extension_236:.2f} (above E)")
     elif direction == 'down':
-        # DOWNTREND: E is LOW, F is higher, target should be BELOW E
-        fe_move_distance = f_price - e_price  # Positive: F > E
-        extension_236 = e_price - (fe_move_distance * 0.236)  # Target BELOW E
-
+        fe_move_distance = f_price - e_price  # Positive
+        extension_236 = e_price - (fe_move_distance * 0.236)
         print(f"\n  🎯 DOWNTREND Completion Calculation:")
-        print(f"    F (38.2% level): ${f_price:.2f}")
-        print(f"    E (LOW): ${e_price:.2f}")
-        print(f"    F-E move: ${fe_move_distance:.2f}")
-        print(f"    Target (E - 23.6%): ${extension_236:.2f} (BELOW E)")
+        print(f"    F (100%): ${f_price:.2f}")
+        print(f"    E (0%): ${e_price:.2f}")
+        print(f"    Target (-23.6%): ${extension_236:.2f} (below E)")
+    else:
+        return {
+            'pattern_completed': False,
+            'reason': 'Unknown direction'
+        }
 
-    print(f"    S bounce: ${s_bounce_price:.2f} at {s_bounce_timestamp}")
+    # Search for first target hit after S
+    remaining_prices = prices[bounce_idx + 1:]
+    remaining_dates = dates[bounce_idx + 1:]
 
-    # Search for target after S bounce
-    remaining_prices = prices[s_idx + 1:]
-    remaining_dates = dates[s_idx + 1:]
-    tolerance = abs(extension_236) * 0.005
+    if not remaining_prices:
+        return {
+            'pattern_completed': False,
+            'target_price': extension_236,
+            'direction': direction,
+            'reason': 'No data after S bounce'
+        }
 
     for i, price in enumerate(remaining_prices):
-        target_reached = False
-
-        if direction == 'up':
-            # UPTREND: Look for price to exceed target ABOVE E
-            target_reached = price >= extension_236 - tolerance
-        elif direction == 'down':
-            # DOWNTREND: Look for price to fall below target BELOW E
-            target_reached = price <= extension_236 + tolerance
-
-        if target_reached:
-            completion_timestamp = remaining_dates[i]
-            completion_point = (completion_timestamp, price)
-
-            print(f"    ✅ PATTERN COMPLETED! Target reached at {completion_timestamp}")
-            print(f"       Target: ${extension_236:.2f}, Actual: ${price:.2f}")
-            print(f"       Accuracy: ${abs(price - extension_236):.2f}")
-
+        if direction == 'up' and price >= extension_236:
+            t_timestamp = remaining_dates[i]
+            t_price = price
+            print(f"    ✅ TARGET HIT at {t_timestamp}, ${t_price:.2f}")
             return {
                 'pattern_completed': True,
-                'completion_point': completion_point,
+                'completion_point': (t_timestamp, t_price),  # T point
                 'target_price': extension_236,
-                'actual_price': price,
-                'accuracy': abs(price - extension_236),
+                'actual_price': t_price,
+                'accuracy': abs(t_price - extension_236),
                 'direction': direction,
                 'fe_move_distance': fe_move_distance,
-                'reason': f'Price reached -23.6% extension target ({direction}trend)'
+                'reason': 'Target reached (uptrend)'
+            }
+        elif direction == 'down' and price <= extension_236:
+            t_timestamp = remaining_dates[i]
+            t_price = price
+            print(f"    ✅ TARGET HIT at {t_timestamp}, ${t_price:.2f}")
+            return {
+                'pattern_completed': True,
+                'completion_point': (t_timestamp, t_price),  # T point
+                'target_price': extension_236,
+                'actual_price': t_price,
+                'accuracy': abs(t_price - extension_236),
+                'direction': direction,
+                'fe_move_distance': fe_move_distance,
+                'reason': 'Target reached (downtrend)'
             }
 
-    print(f"    ⏳ Pattern not yet completed - target not reached")
-    print(f"       Searched {len(remaining_prices)} prices after S bounce")
-
+    # If never hit
+    print(f"    ⏳ Target not yet reached")
     return {
         'pattern_completed': False,
         'target_price': extension_236,
         'direction': direction,
         'fe_move_distance': fe_move_distance,
-        'reason': 'Target -23.6% extension not yet reached',
-        'prices_searched': len(remaining_prices)
+        'reason': 'Target -23.6% not reached yet'
     }
-
-
-def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
-                                                 min_threshold_pct):
-    """
-    ENHANCED trailing strategy with pattern completion detection
-    """
-    # Get all potential E points
-    all_e_points = find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction,
-                                             min_threshold_pct)
-
-    if not all_e_points:
-        return {
-            'e_point': None,
-            'validation': {'valid_50_bounce': False, 'reason': 'No E points found'},
-            'candidate_number': 0,
-            'total_candidates_tested': 0,
-            'is_valid': False,
-            'pattern_completed': False,
-            'strategy': 'trailing_with_completion',
-            'trailing_attempts': []
-        }
-
-    trailing_attempts = []
-
-    # Test each E point for S bounce AND pattern completion
-    for i, (initial_e_timestamp, initial_e_price) in enumerate(all_e_points):
-        f_price = fib_levels['38.2']
-        fe_move = initial_e_price - f_price
-        s_level = f_price + (fe_move * 0.5)
-
-        print(f"\n--- TRAILING ATTEMPT {i + 1}/{len(all_e_points)} ---")
-        print(f"Testing initial E: {initial_e_timestamp}, ${initial_e_price:.2f}")
-
-        # Initialize completion_result with default values
-        completion_result = {
-            'pattern_completed': False,
-            'reason': 'No S bounce found'
-        }
-
-        # Check for S bounce using initial E
-        validation = check_50_percent_bounce_after_e_correct(
-            prices, dates, initial_e_timestamp, initial_e_price, fib_levels, direction, min_threshold_pct
-        )
-
-        if validation['valid_50_bounce']:
-            print(f"\n🎯 S BOUNCE FOUND! Now finding ABSOLUTE {direction.upper()} extreme before bounce...")
-
-            # Get bounce point
-            bounce_timestamp = validation['bounce_point'][0]
-            bounce_price = validation['bounce_point'][1]
-            bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
-            d_idx = find_index_from_timestamp(dates, d_timestamp)
-
-            # Find ABSOLUTE extreme between D and bounce point
-            search_prices = prices[d_idx:bounce_idx + 1]
-            search_dates = dates[d_idx:bounce_idx + 1]
-
-            if direction == 'up':
-                # Find ABSOLUTE HIGHEST before bounce
-                max_price = max(search_prices)
-                max_idx = search_prices.index(max_price)
-                final_e_timestamp = search_dates[max_idx]
-                final_e_price = max_price
-                print(f"    ✨ ABSOLUTE HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
-
-            elif direction == 'down':
-                # Find ABSOLUTE LOWEST before bounce
-                min_price = min(search_prices)
-                min_idx = search_prices.index(min_price)
-                final_e_timestamp = search_dates[min_idx]
-                final_e_price = min_price
-                print(f"    ✨ ABSOLUTE LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
-
-            # Recalculate everything with the ABSOLUTE extreme
-            final_fe_move = final_e_price - f_price
-            final_s_level = f_price + (final_fe_move * 0.5)
-
-            # NOW CHECK FOR PATTERN COMPLETION using the bounce point
-            completion_result = check_pattern_completion_236_extension(
-                prices, dates, bounce_timestamp, bounce_price, f_price, final_e_price, direction
-            )
-
-            # Pattern is VALID regardless of completion status
-            print(f"    📊 FINAL CALCULATION:")
-            print(f"       F (100%): ${f_price:.2f}")
-            print(f"       E (0%): ${final_e_price:.2f}")
-            print(f"       F-E move: ${final_fe_move:.2f}")
-            print(f"       S level: ${final_s_level:.2f}")
-
-            if completion_result['pattern_completed']:
-                print(f"    🏆 PATTERN STATUS: VALID + COMPLETED!")
-            else:
-                print(f"    ✅ PATTERN STATUS: VALID (uncompleted)")
-
-            attempt_record = {
-                'candidate_number': i + 1,
-                'e_point': (final_e_timestamp, final_e_price),
-                'distance_from_d': abs(final_e_price - d_price),
-                'fe_move': final_fe_move,
-                's_level': final_s_level,
-                'validation': validation,
-                'completion': completion_result,  # ✅ Fixed
-                'found_bounce': True,
-                'pattern_completed': completion_result['pattern_completed']
-            }
-            trailing_attempts.append(attempt_record)
-
-            # RETURN VALID PATTERN (completed OR uncompleted)
-            return {
-                'e_point': (final_e_timestamp, final_e_price),
-                'validation': validation,
-                'completion': completion_result,
-                'candidate_number': i + 1,
-                'total_candidates_tested': i + 1,
-                'is_valid': True,  # Valid regardless of completion
-                'pattern_completed': completion_result['pattern_completed'],
-                'distance_from_d': abs(final_e_price - d_price),
-                'strategy': 'trailing_with_completion',
-                'trailing_attempts': trailing_attempts,
-                'successful_attempt': i + 1
-            }
-        else:
-            print(f"    ❌ No S bounce found with this E candidate")
-            attempt_record = {
-                'candidate_number': i + 1,
-                'e_point': (initial_e_timestamp, initial_e_price),
-                'distance_from_d': abs(initial_e_price - d_price),
-                'fe_move': fe_move,
-                's_level': s_level,
-                'validation': validation,
-                'completion': {'pattern_completed': False, 'reason': 'No S bounce'},  # ✅ Fixed
-                'found_bounce': False,
-                'pattern_completed': False
-            }
-            trailing_attempts.append(attempt_record)
-
-    # No valid pattern found
-    return {
-        'e_point': all_e_points[-1] if all_e_points else None,
-        'validation': trailing_attempts[-1]['validation'] if trailing_attempts else {'valid_50_bounce': False,
-                                                                                     'reason': 'No E points found'},
-        'completion': {'pattern_completed': False, 'reason': 'No valid S bounce found'},
-        'candidate_number': len(all_e_points),
-        'total_candidates_tested': len(all_e_points),
-        'is_valid': False,
-        'pattern_completed': False,
-        'distance_from_d': abs(all_e_points[-1][1] - d_price) if all_e_points else 0,
-        'strategy': 'trailing_with_completion',
-        'trailing_attempts': trailing_attempts,
-        'successful_attempt': None
-    }
-
-
-def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.01, min_threshold_pct=1.0):
-    """
-    Analyze fan extension with completion detection (23.6% extension)
-    """
-    # Calculate Fibonacci levels
-    fib_levels = calculate_fibonacci_levels(pattern)
-
-    # Get D point details
-    d_timestamp = pattern['D'][0]
-    d_price = pattern['D'][1]
-    direction = pattern.get('direction', 'unknown')
-
-    print(f"\n{'=' * 70}")
-    print(f"ANALYZING {direction.upper()} PATTERN - WITH COMPLETION DETECTION")
-    print(f"{'=' * 70}")
-    print(f"  D point: {d_timestamp}, ${d_price:.2f}")
-    print(f"  F point (100% level): ${fib_levels['38.2']:.2f}")
-    print(f"  Target: -23.6% extension for pattern completion")
-
-    # Determine search direction
-    analysis_key = None
-    if direction == 'down':
-        print(f"  🔍 Looking for LOWs (E) → S bounce → completion target")
-        analysis_key = 'lowest_after_d'
-    elif direction == 'up':
-        print(f"  🔍 Looking for HIGHs (E) → S bounce → completion target")
-        analysis_key = 'highest_after_d'
-    else:
-        print(f"  🔍 Unknown direction, defaulting to HIGH search")
-        analysis_key = 'highest_after_d'
-        direction = 'up'
-
-    # Use ENHANCED TRAILING STRATEGY with completion detection
-    e_result = find_valid_e_with_trailing_strategy_complete(
-        prices, dates, d_timestamp, d_price, fib_levels, direction, min_change, min_threshold_pct
-    )
-
-    # Build analysis results
-    analysis = {
-        'pattern': pattern,
-        'fibonacci_levels': fib_levels,
-        'retracement_382_level': fib_levels['38.2'],
-        'f_level': fib_levels['38.2'],
-        'd_timestamp': d_timestamp,
-        'd_price': d_price,
-        'pattern_direction': direction,
-        'min_threshold_pct': min_threshold_pct,
-        'min_distance_from_d': d_price * (min_threshold_pct / 100),
-        'is_valid': False,
-        'pattern_completed': False,
-        'calculation_method': 'Trailing E Point Strategy with 23.6% completion detection',
-        'strategy': 'trailing_with_completion'
-    }
-
-    if e_result and e_result['is_valid']:
-        # Found valid E point
-        e_point = e_result['e_point']
-        e_timestamp, e_price = e_point
-
-        validation_info = e_result['validation']
-        # FIXED: Safe access to completion info
-        completion_info = e_result.get('completion', {
-            'pattern_completed': False,
-            'reason': 'No completion data available'
-        })
-        s_level = validation_info['s_level']
-        f_price = validation_info['f_price']
-        fe_move = validation_info['fe_move']
-
-        analysis[analysis_key] = e_point
-        analysis['validation_info'] = validation_info
-        analysis['completion_info'] = completion_info
-        analysis['is_valid'] = True
-        analysis['pattern_completed'] = completion_info.get('pattern_completed', False)
-        analysis['s_level'] = s_level
-        analysis['f_price'] = f_price
-        analysis['fe_move'] = fe_move
-        analysis['distance_from_d'] = e_result['distance_from_d']
-        analysis['trailing_attempts'] = e_result['trailing_attempts']
-
-        #if e_result and e_result['is_valid']:
-        # ... [keep everything the same until here] ...
-
-        # FIX: Use the SAME calculation logic as the completion function
-        if direction == 'up':
-            # UPTREND: E is above F, target is further above E
-            fe_move_distance = e_price - f_price  # Should be positive
-            extension_236 = e_price + (fe_move_distance * 0.236)
-            print(f"  DEBUG: UPTREND calc - E: ${e_price:.2f}, F: ${f_price:.2f}")
-            print(f"  DEBUG: fe_move_distance: ${fe_move_distance:.2f}")
-            print(f"  DEBUG: extension_236: ${extension_236:.2f}")
-
-        elif direction == 'down':
-            # DOWNTREND: E is below F, target is further below E
-            fe_move_distance = f_price - e_price  # Should be positive
-            extension_236 = e_price - (fe_move_distance * 0.236)
-            print(f"  DEBUG: DOWNTREND calc - E: ${e_price:.2f}, F: ${f_price:.2f}")
-            print(f"  DEBUG: fe_move_distance: ${fe_move_distance:.2f}")
-            print(f"  DEBUG: extension_236: ${extension_236:.2f}")
-        else:
-            # Default uptrend
-            fe_move_distance = abs(e_price - f_price)
-            extension_236 = e_price + (fe_move_distance * 0.236)
-
-        analysis['completion_target'] = extension_236
-
-
-        print(f"\n🎯 PATTERN ANALYSIS COMPLETE!")
-        print(f"  ✅ Valid E point: ${e_price:.2f}")
-        print(f"  ✅ S bounce confirmed: ${validation_info['bounce_point'][1]:.2f}")
-        print(f"  🎯 Completion target (-23.6%): ${extension_236:.2f}")
-
-        if completion_info.get('pattern_completed', False):
-            print(f"  🏆 STATUS: VALID + COMPLETED!")
-            print(f"      Target: ${completion_info.get('target_price', 'N/A'):.2f}")
-            print(f"      Actual: ${completion_info.get('actual_price', 'N/A'):.2f}")
-            print(f"      Accuracy: ${completion_info.get('accuracy', 'N/A'):.2f}")
-        else:
-            print(f"  ⏳ STATUS: VALID (waiting for completion)")
-            print(f"      Still monitoring for target: ${extension_236:.2f}")
-
-    else:
-        # Strategy failed
-        analysis['validation_info'] = e_result.get('validation', {
-            'valid_50_bounce': False,
-            'reason': 'No validation data'
-        })
-        # FIXED: Safe access to completion info when pattern failed
-        analysis['completion_info'] = e_result.get('completion', {
-            'pattern_completed': False,
-            'reason': 'No valid pattern found'
-        })
-        analysis['is_valid'] = False
-        analysis['pattern_completed'] = False
-        analysis['trailing_attempts'] = e_result.get('trailing_attempts', [])
-
-        print(f"\n❌ NO VALID PATTERN FOUND")
-
-    return analysis
-def plot_pattern_with_completion_analysis(analysis, prices, dates, min_change=0.01):
-    """
-    Professional visualization showing F-E-S pattern with completion target
-    Shows both completed and uncompleted valid patterns
-    """
-    pattern = analysis['pattern']
-    direction = pattern.get('direction', 'unknown')
-
-    # Classic professional setup
-    plt.style.use('default')
-    fig, ax = plt.subplots(figsize=(22, 12))
-    fig.patch.set_facecolor('white')
-    ax.set_facecolor('#FAFAFA')
-
-    # Get display range
-    pattern_indices = []
-    for point in ['A', 'B', 'C', 'D']:
-        timestamp, price = pattern[point]
-        idx = find_index_from_timestamp(dates, timestamp)
-        pattern_indices.append(idx)
-
-    min_pattern_idx = min(pattern_indices)
-    max_pattern_idx = max(pattern_indices)
-
-    # Include final E point in display range
-    final_e_point = None
-    if analysis.get('lowest_after_d'):
-        final_e_point = analysis['lowest_after_d']
-    elif analysis.get('highest_after_d'):
-        final_e_point = analysis['highest_after_d']
-
-    if final_e_point:
-        e_idx = find_index_from_timestamp(dates, final_e_point[0])
-        max_display_idx = max(max_pattern_idx, e_idx + 250)
-    else:
-        max_display_idx = max_pattern_idx
-
-    # Calculate display range with padding
-    pattern_range = max_pattern_idx - min_pattern_idx
-    padding = max(100, int(pattern_range * 0.7))
-    start_idx = max(0, min_pattern_idx - padding)
-    end_idx = min(len(prices) - 1, max_display_idx + padding)
-
-    # Plot price data
-    subset_prices = prices[start_idx:end_idx + 1]
-    subset_dates = dates[start_idx:end_idx + 1]
-    ax.plot(subset_dates, subset_prices, color='#1f77b4', linewidth=2, label='Price', zorder=1)
-
-    # Pattern points A, B, C, D
-    points = ['A', 'B', 'C', 'D']
-    point_colors = {'A': '#2F2F2F', 'B': '#D62728', 'C': '#FF7F0E', 'D': '#1f77b4'}
-
-    for point in points:
-        timestamp, price = pattern[point]
-        color = point_colors[point]
-        ax.plot(timestamp, price, 'o', color=color, markersize=12, zorder=10,
-                markeredgecolor='white', markeredgewidth=2)
-        ax.text(timestamp, price, point, ha='center', va='center', fontsize=12,
-                fontweight='bold', color='white', zorder=15)
-
-    # Draw pattern lines
-    for i in range(len(points) - 1):
-        timestamp1, price1 = pattern[points[i]]
-        timestamp2, price2 = pattern[points[i + 1]]
-        ax.plot([timestamp1, timestamp2], [price1, price2], color='#666666',
-                linewidth=2, alpha=0.8, zorder=4)
-
-    # F level and point
-    f_price = analysis.get('f_price', analysis['retracement_382_level'])
-    d_timestamp = pattern['D'][0]
-
-    ax.axhline(y=f_price, color='#2CA02C', linestyle='--', linewidth=3, alpha=0.8, zorder=3)
-    ax.plot(d_timestamp, f_price, 's', color='#2CA02C', markersize=16, zorder=15,
-            markeredgecolor='white', markeredgewidth=3)
-    ax.text(d_timestamp, f_price, 'F', ha='center', va='center', fontsize=14,
-            fontweight='black', color='white', zorder=16,
-            path_effects=[pe.withStroke(linewidth=3, foreground='#1B5E1F')])
-
-    # S level
-    if analysis.get('s_level'):
-        s_level = analysis['s_level']
-        ax.axhline(y=s_level, color='#9467BD', linewidth=4, alpha=0.9, zorder=3)
-
-    # COMPLETION TARGET LINE
-    if analysis.get('completion_target'):
-        target_price = analysis['completion_target']
-        ax.axhline(y=target_price, color='#FF6B35', linestyle=':', linewidth=3, alpha=0.9, zorder=3)
-
-    # Plot E point
-    if final_e_point:
-        e_timestamp, e_price = final_e_point
-
-        # E point - solid diamond
-        ax.plot(e_timestamp, e_price, 'D', color='#228B22', markersize=18, zorder=15,
-                markeredgecolor='white', markeredgewidth=3)
-        ax.text(e_timestamp, e_price, 'E', ha='center', va='center', fontsize=16,
-                fontweight='black', color='white', zorder=16,
-                path_effects=[pe.withStroke(linewidth=4, foreground='#006400')])
-
-    # Validation points
-    validation_info = analysis.get('validation_info', {})
-
-    # Threshold cross
-    if validation_info.get('threshold_point'):
-        threshold_timestamp, threshold_price = validation_info['threshold_point']
-        ax.plot(threshold_timestamp, threshold_price, '^', color='#FF7F0E', markersize=10, zorder=13,
-                markeredgecolor='white', markeredgewidth=2)
-
-    # S bounce point
-    if validation_info.get('bounce_point'):
-        bounce_timestamp, bounce_price = validation_info['bounce_point']
-        ax.plot(bounce_timestamp, bounce_price, '*', color='#DC143C', markersize=20, zorder=20,
-                markeredgecolor='white', markeredgewidth=3)
-        ax.text(bounce_timestamp, bounce_price, 'S', ha='center', va='center', fontsize=18,
-                fontweight='black', color='white', zorder=21,
-                path_effects=[pe.withStroke(linewidth=4, foreground='#8B0000')])
-
-    # COMPLETION POINT (if exists)
-    completion_info = analysis.get('completion_info', {})
-    if completion_info.get('pattern_completed') and completion_info.get('completion_point'):
-        comp_timestamp, comp_price = completion_info['completion_point']
-
-        # Large gold star for completion
-        ax.plot(comp_timestamp, comp_price, '*', color='#FFD700', markersize=24, zorder=22,
-                markeredgecolor='white', markeredgewidth=3)
-        ax.text(comp_timestamp, comp_price, 'T', ha='center', va='center', fontsize=18,
-                fontweight='black', color='white', zorder=23,
-                path_effects=[pe.withStroke(linewidth=4, foreground='#B8860B')])
-
-    # Draw F-E connection line
-    if analysis.get('is_valid', False) and final_e_point:
-        ax.plot([d_timestamp, final_e_point[0]], [f_price, final_e_point[1]],
-                color='#17BECF', linewidth=3, alpha=0.8, linestyle='--', zorder=8)
-
-    # Enhanced legend
-    legend_elements = [
-        plt.Line2D([0], [0], color='#1f77b4', linewidth=2, label='Price'),
-        plt.Line2D([0], [0], color='#2CA02C', linestyle='--', linewidth=3, label=f'F Level (100%): ${f_price:.0f}'),
-    ]
-
-    if analysis.get('s_level'):
-        s_level = analysis['s_level']
-        legend_elements.append(
-            plt.Line2D([0], [0], color='#9467BD', linewidth=4, label=f'S Level (50%): ${s_level:.0f}')
-        )
-
-    if analysis.get('completion_target'):
-        target_price = analysis['completion_target']
-        legend_elements.append(
-            plt.Line2D([0], [0], color='#FF6B35', linestyle=':', linewidth=3,
-                       label=f'Target (-23.6%): ${target_price:.0f}')
-        )
-
-    if analysis.get('is_valid', False):
-        fe_move = analysis.get('fe_move', 0)
-        legend_elements.append(
-            plt.Line2D([0], [0], color='#17BECF', linestyle='--', linewidth=3, label=f'F-E Move: ${fe_move:.0f}')
-        )
-
-    legend = ax.legend(handles=legend_elements, loc='upper left', framealpha=0.95,
-                       fontsize=11, facecolor='white', edgecolor='gray')
-    legend.get_frame().set_linewidth(1)
-
-    # Format chart
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate()
-
-    ax.set_xlabel('Time', fontsize=12, fontweight='bold', color='#333333')
-    ax.set_ylabel('Price ($)', fontsize=12, fontweight='bold', color='#333333')
-
-    # Enhanced title with completion status
-    pattern_completed = analysis.get('pattern_completed', False)
-
-    if analysis.get('is_valid', False):
-        if pattern_completed:
-            title = f'🏆 {direction.upper()} Pattern - COMPLETED\nF-E-S Pattern + Target Reached'
-            title_color = '#FFD700'  # Gold for completed
-        else:
-            title = f'✅ {direction.upper()} Pattern - VALID (Uncompleted)\nF-E-S Pattern Confirmed, Awaiting Target'
-            title_color = '#2CA02C'  # Green for valid
-    else:
-        title = f'❌ {direction.upper()} Pattern - INVALID\nNo Valid F-E-S Pattern Found'
-        title_color = '#D62728'  # Red for invalid
-
-    ax.text(0.5, 0.98, title, transform=ax.transAxes, fontsize=14, fontweight='bold',
-            ha='center', va='top', color=title_color)
-
-    # Professional grid
-    ax.grid(True, which='major', linestyle='-', alpha=0.3, color='#CCCCCC')
-    ax.grid(True, which='minor', linestyle=':', alpha=0.1, color='#DDDDDD')
-
-    # Clean axes styling
-    for spine in ax.spines.values():
-        spine.set_color('#888888')
-        spine.set_linewidth(1)
-
-    ax.tick_params(colors='#333333', which='both')
-
-    plt.tight_layout()
-    plt.show()
-
-    # Enhanced console output
-    print("=" * 70)
-    if analysis.get('is_valid', False):
-        if pattern_completed:
-            print("🏆 PATTERN STATUS: VALID + COMPLETED")
-            comp_info = analysis['completion_info']
-            print(f"  ✅ E Point: ${final_e_point[1]:.2f}")
-            print(f"  ✅ S Bounce: ${validation_info['bounce_point'][1]:.2f}")
-            print(f"  🎯 Target: ${comp_info['target_price']:.2f}")
-            print(f"  🏆 Completion: ${comp_info['actual_price']:.2f}")
-            print(f"  📊 Accuracy: ${comp_info['accuracy']:.2f}")
-        else:
-            print("✅ PATTERN STATUS: VALID (UNCOMPLETED)")
-            print(f"  ✅ E Point: ${final_e_point[1]:.2f}")
-            print(f"  ✅ S Bounce: ${validation_info['bounce_point'][1]:.2f}")
-            print(f"  ⏳ Target: ${analysis['completion_target']:.2f}")
-            print(f"  📈 Status: Monitoring for completion")
-    else:
-        print("❌ PATTERN STATUS: INVALID")
-        print(f"  🔍 No valid F-E-S pattern found")
-    print("=" * 70)
 
 def plot_pattern_with_extension(analysis, prices, dates, min_change=0.01):
     """
@@ -1515,8 +1359,8 @@ def plot_all_key_points_detail(analysis, prices, dates):
     if validation_info.get('reason'):
         ax2.text(0.6, 0.6, f"Reason: {validation_info['reason']}", fontsize=10)
 
-    ax2.set_xlim(0, 1)
-    ax2.set_ylim(0, 1)
+    ax.set_xlim(min(subset_dates), max(subset_dates))
+    ax.set_ylim(min(subset_prices) * 0.95, max(subset_prices) * 1.05)
     ax2.axis('off')
 
     plt.tight_layout()
