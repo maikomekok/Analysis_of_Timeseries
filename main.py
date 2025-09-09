@@ -386,57 +386,7 @@ def build_pattern_config(params_dict):
     return config
 
 
-def test_pattern_detection(data_file, date_str, time_str=None):
-    """Test the pattern detection on your data"""
-    print("=== TESTING PATTERN DETECTION ===")
-
-    # Load data
-    if time_str:
-        prices, dates, df = load_and_prepare_data(data_file)
-        # Apply time filtering if needed
-    else:
-        prices, dates, df = load_and_prepare_data(data_file)
-
-    if len(prices) < 10:
-        print("Not enough data points for testing")
-        return None
-
-    print(f"Testing with {len(prices)} data points")
-    print(f"Date range: {dates[0]} to {dates[-1]}")
-    print(f"Price range: ${min(prices):.2f} to ${max(prices):.2f}")
-
-    # Configuration for pattern detection
-    pattern_config = {
-        "retracement_target": 0.5,
-        "retracement_tolerance": 0.02,
-        "completion_extension": 0.236,
-        "failure_level": 0.764,
-        "min_move_multiplier": 2.0
-    }
-
-    # Test the pattern detection
-    patterns = find_significant_price_patterns(prices, dates, min_change_pct=0.005, config=pattern_config)
-
-    if patterns:
-        print(f"\n=== PATTERN DETECTION RESULTS ===")
-        print(f"Found {len(patterns)} patterns:")
-
-        for i, pattern in enumerate(patterns):
-            print(f"\nPattern {i + 1}:")
-            print(f"  Status: {pattern['status']}")
-            print(f"  A (absolute low): ${pattern['A'][1]:.2f} at index {pattern['A'][0]}")
-            print(f"  B (high): ${pattern['B'][1]:.2f} at index {pattern['B'][0]}")
-            print(f"  C (50% retrace): ${pattern['C'][1]:.2f} at index {pattern['C'][0]}")
-            print(f"  D: ${pattern['D'][1]:.2f} at index {pattern['D'][0]}")
-            print(f"  Initial move: {pattern['initial_move_pct']:.2f}%")
-            print(f"  Retracement: {pattern['retracement_pct']:.2f}%")
-            print(f"  Failure level: ${pattern['failure_level']:.2f}")
-            print(f"  Completion level: ${pattern['completion_level']:.2f}")
-
-        # Create visualization
-        fig, ax = plt.subplots(figsize=(15, 8))
-
-        # Plot price series
+ 
         ax.plot(dates, prices, 'k-', alpha=0.7, linewidth=1, label='Price')
 
         # Plot patterns
@@ -659,8 +609,7 @@ def main():
 
     # Check if in test mode
     if hasattr(args, 'test') and args.test:
-        print("Running in test mode...")
-        test_pattern_detection(data_file, date_str, time_str)
+        print("Test mode flag detected, but test utilities are removed.")
         return
 
     # Extract analysis parameters

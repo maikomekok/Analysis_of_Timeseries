@@ -11,11 +11,156 @@ from analyze import (
 )
 import matplotlib.patheffects as pe
 
-def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
-                                                min_threshold_pct):
+
+def calculate_80_percent_retracement(f_price, e_price, direction, failure_percentage=0.80):
     """
-    ENHANCED trailing strategy with fixed S point as first 50% retracement after final E
-    FIXED: Locks S to the first valid bounce after the final E
+    Calculate the failure retracement level between F and E points.
+    This represents the failure threshold for excessive retracement beyond 50%.
+
+    failure_percentage retracement = failure_percentage% back from E toward F (deep retracement failure level)
+    50% retracement = 50% back from E toward F (normal S bounce level)
+
+    In uptrend: F < failure_level < S level < E
+    In downtrend: E < S level < failure_level < F
+
+    Args:
+        f_price: F point price (38.2% level)
+        e_price: E point price (0% level)
+        direction: 'up' or 'down'
+        failure_percentage: Percentage for failure threshold (default 0.80 = 80%)
+    """
+    if direction == 'up':
+        # UPTREND: F is below E, failure_percentage% retracement moves DOWN from E toward F
+        fe_move = e_price - f_price  # Positive (E above F)
+        retracement_80 = e_price - (fe_move * failure_percentage)  # Move failure_percentage% back toward F
+        print(
+            f"    UPTREND {failure_percentage * 100:.0f}% calc: E=${e_price:.2f} - {failure_percentage * 100:.0f}% of ${fe_move:.2f} = ${retracement_80:.2f}")
+    elif direction == 'down':
+        # DOWNTREND: F is above E, failure_percentage% retracement moves UP from E toward F
+        fe_move = f_price - e_price  # Positive (F above E)
+        retracement_80 = e_price + (fe_move * failure_percentage)  # Move failure_percentage% back toward F
+        print(
+            f"    DOWNTREND {failure_percentage * 100:.0f}% calc: E=${e_price:.2f} + {failure_percentage * 100:.0f}% of ${fe_move:.2f} = ${retracement_80:.2f}")
+    else:
+        # Auto-detect direction
+        if e_price > f_price:  # Uptrend
+            fe_move = e_price - f_price
+            retracement_80 = e_price - (fe_move * failure_percentage)
+        else:  # Downtrend
+            fe_move = f_price - e_price
+            retracement_80 = e_price + (fe_move * failure_percentage)
+
+    return retracement_80
+
+
+def check_80_percent_failure(prices, dates, e_timestamp, e_price, f_price, direction, start_from_timestamp=None,
+                             failure_percentage=0.80):
+    """
+    Check if price crosses retracement failure level after E point.
+    ENHANCED: Better logging and more comprehensive failure detection.
+    - UPTREND: Failure if price goes BELOW failure level (too much retracement down)
+    - DOWNTREND: Failure if price goes ABOVE failure level (too much retracement up)
+
+    Args:
+        failure_percentage: Percentage for failure threshold (default 0.80 = 80%)
+    """
+    if start_from_timestamp:
+        start_idx = find_index_from_timestamp(dates, start_from_timestamp)
+    else:
+        start_idx = find_index_from_timestamp(dates, e_timestamp)
+
+    if start_idx >= len(prices) - 1:
+        return {
+            'failed_80_percent': False,
+            'reason': 'At end of data'
+        }
+
+    retracement_80 = calculate_80_percent_retracement(f_price, e_price, direction, failure_percentage)
+
+    print(f"  🔍 ENHANCED {failure_percentage * 100:.0f}% RETRACEMENT FAILURE CHECK:")
+    print(f"    F (100% level): ${f_price:.2f}")
+    print(f"    E (0% level): ${e_price:.2f}")
+    print(f"    {failure_percentage * 100:.0f}% retracement level: ${retracement_80:.2f}")
+    print(f"    Checking prices from index {start_idx + 1} to {len(prices) - 1}")
+
+    if direction == 'up':
+        print(f"    UPTREND: Failure if price goes BELOW ${retracement_80:.2f} (excessive retracement)")
+    else:
+        print(f"    DOWNTREND: Failure if price goes ABOVE ${retracement_80:.2f} (excessive retracement)")
+
+    # Track the closest approach to failure level for debugging
+    closest_approach = float('inf')
+    closest_timestamp = None
+    closest_price = None
+
+    for i in range(start_idx + 1, len(prices)):
+        current_price = prices[i]
+        current_timestamp = dates[i]
+
+        # Track closest approach for debugging
+        if direction == 'up':
+            distance_to_failure = current_price - retracement_80
+            if distance_to_failure < closest_approach:
+                closest_approach = distance_to_failure
+                closest_timestamp = current_timestamp
+                closest_price = current_price
+        else:
+            distance_to_failure = retracement_80 - current_price
+            if distance_to_failure < closest_approach:
+                closest_approach = distance_to_failure
+                closest_timestamp = current_timestamp
+                closest_price = current_price
+
+        if direction == 'up':
+            if current_price <= retracement_80:
+                print(f"    ❌ UPTREND FAILURE DETECTED!")
+                print(
+                    f"       Price ${current_price:.2f} <= {failure_percentage * 100:.0f}% level ${retracement_80:.2f}")
+                print(f"       At timestamp: {current_timestamp}")
+                return {
+                    'failed_80_percent': True,
+                    'failure_point': (current_timestamp, current_price),
+                    'failure_level': retracement_80,
+                    'reason': f'UPTREND: Excessive retracement - price went below {failure_percentage * 100:.0f}% level',
+                    'closest_approach': closest_approach,
+                    'closest_point': (closest_timestamp, closest_price)
+                }
+        elif direction == 'down':
+            if current_price >= retracement_80:
+                print(f"    ❌ DOWNTREND FAILURE DETECTED!")
+                print(
+                    f"       Price ${current_price:.2f} >= {failure_percentage * 100:.0f}% level ${retracement_80:.2f}")
+                print(f"       At timestamp: {current_timestamp}")
+                return {
+                    'failed_80_percent': True,
+                    'failure_point': (current_timestamp, current_price),
+                    'failure_level': retracement_80,
+                    'reason': f'DOWNTREND: Excessive retracement - price went above {failure_percentage * 100:.0f}% level',
+                    'closest_approach': closest_approach,
+                    'closest_point': (closest_timestamp, closest_price)
+                }
+
+    print(f"    ✅ No {failure_percentage * 100:.0f}% retracement failure detected")
+    print(f"    📊 Closest approach to failure level: ${closest_approach:.2f}")
+    if closest_timestamp:
+        print(f"    📍 Closest point: {closest_timestamp} at ${closest_price:.2f}")
+
+    return {
+        'failed_80_percent': False,
+        'failure_level': retracement_80,
+        'reason': f'No excessive retracement beyond {failure_percentage * 100:.0f}% level',
+        'closest_approach': closest_approach,
+        'closest_point': (closest_timestamp, closest_price)
+    }
+
+
+def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
+                                                 min_threshold_pct, failure_percentage=0.80):
+    """
+    ENHANCED trailing strategy with configurable retracement failure criteria
+
+    Args:
+        failure_percentage: Percentage for failure threshold (default 0.80 = 80%)
     """
     all_e_points = find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction,
                                              min_threshold_pct)
@@ -28,6 +173,7 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
             'total_candidates_tested': 0,
             'is_valid': False,
             'pattern_completed': False,
+            'failed_80_percent': False,
             'strategy': 'trailing_with_completion',
             'trailing_attempts': []
         }
@@ -39,41 +185,115 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
         fe_move = initial_e_price - f_price
         s_level = f_price + (fe_move * 0.5)
 
-        print(f"\n--- TRAILING ATTEMPT {i + 1}/{len(all_e_points)} ---")
+        print(
+            f"\n--- TRAILING ATTEMPT {i + 1}/{len(all_e_points)} (WITH {failure_percentage * 100:.0f}% FAILURE CHECK) ---")
         print(f"Testing initial E: {initial_e_timestamp}, ${initial_e_price:.2f}")
 
         validation = check_50_percent_bounce_after_e_correct(
-            prices, dates, initial_e_timestamp, initial_e_price, fib_levels, direction, min_threshold_pct
+            prices, dates, initial_e_timestamp, initial_e_price, fib_levels, direction, min_threshold_pct,
+            failure_percentage
         )
 
+        # Check if pattern failed due to 80% retracement
+        if validation.get('failed_80_percent', False):
+            print(f"    ❌ PATTERN FAILED: 80% retracement violation")
+            attempt_record = {
+                'candidate_number': i + 1,
+                'e_point': (initial_e_timestamp, initial_e_price),
+                'distance_from_d': abs(initial_e_price - d_price),
+                'fe_move': fe_move,
+                's_level': s_level,
+                'validation': validation,
+                'completion': {'pattern_completed': False, 'reason': '80% retracement failure'},
+                'found_bounce': validation['valid_50_bounce'],
+                'pattern_completed': False,
+                'failed_80_percent': True,
+                'failure_type': 'retracement_violation',
+                'final_valid': False
+            }
+            trailing_attempts.append(attempt_record)
+
+            # Return immediately on 80% failure
+            return {
+                'e_point': (initial_e_timestamp, initial_e_price),
+                'validation': validation,
+                'completion': attempt_record['completion'],
+                'candidate_number': i + 1,
+                'total_candidates_tested': i + 1,
+                'is_valid': False,
+                'pattern_completed': False,
+                'failed_80_percent': True,
+                'failure_info': validation.get('failure_info', {}),
+                'distance_from_d': abs(initial_e_price - d_price),
+                'strategy': 'trailing_with_completion',
+                'trailing_attempts': trailing_attempts,
+                'successful_attempt': None
+            }
+
         if validation['valid_50_bounce']:
-            print(f"\n🎯 Initial S BOUNCE FOUND! Finding ABSOLUTE {direction.upper()} extreme before bounce...")
+            print(f"\n🎯 Initial S BOUNCE FOUND! Finding {direction.upper()} extreme BEFORE bounce...")
 
             bounce_timestamp = validation['bounce_point'][0]
             bounce_price = validation['bounce_point'][1]
             bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
             d_idx = find_index_from_timestamp(dates, d_timestamp)
 
-            search_prices = prices[d_idx:bounce_idx + 1]
-            search_dates = dates[d_idx:bounce_idx + 1]
+            # Search ONLY from D to the bounce point (not including bounce point)
+            search_prices = prices[d_idx:bounce_idx]
+            search_dates = dates[d_idx:bounce_idx]
 
             if direction == 'up':
                 max_price = max(search_prices)
                 max_idx = search_prices.index(max_price)
                 final_e_timestamp = search_dates[max_idx]
                 final_e_price = max_price
-                print(f"    ✨ ABSOLUTE HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+                print(f"    ✨ HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
             elif direction == 'down':
                 min_price = min(search_prices)
                 min_idx = search_prices.index(min_price)
                 final_e_timestamp = search_dates[min_idx]
                 final_e_price = min_price
-                print(f"    ✨ ABSOLUTE LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+                print(f"    ✨ LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
 
-            # Re-validate S using the final E, but lock to the first bounce
+            # Re-validate S using the final E with configurable failure check
             final_validation = check_50_percent_bounce_after_e_correct(
-                prices, dates, final_e_timestamp, final_e_price, fib_levels, direction, min_threshold_pct
+                prices, dates, final_e_timestamp, final_e_price, fib_levels, direction, min_threshold_pct,
+                failure_percentage
             )
+
+            # Check if final validation failed due to 80%
+            if final_validation.get('failed_80_percent', False):
+                print(f"    ❌ FINAL E FAILED: 80% retracement violation")
+                attempt_record = {
+                    'candidate_number': i + 1,
+                    'e_point': (final_e_timestamp, final_e_price),
+                    'distance_from_d': abs(final_e_price - d_price),
+                    'fe_move': abs(final_e_price - f_price),
+                    's_level': final_validation.get('s_level', s_level),
+                    'validation': final_validation,
+                    'completion': {'pattern_completed': False, 'reason': '80% retracement failure'},
+                    'found_bounce': final_validation['valid_50_bounce'],
+                    'pattern_completed': False,
+                    'failed_80_percent': True,
+                    'final_valid': False
+                }
+                trailing_attempts.append(attempt_record)
+
+                return {
+                    'e_point': (final_e_timestamp, final_e_price),
+                    'validation': final_validation,
+                    'completion': attempt_record['completion'],
+                    'candidate_number': i + 1,
+                    'total_candidates_tested': i + 1,
+                    'is_valid': False,
+                    'pattern_completed': False,
+                    'failed_80_percent': True,
+                    'failure_info': final_validation.get('failure_info', {}),
+                    'distance_from_d': abs(final_e_price - d_price),
+                    'strategy': 'trailing_with_completion',
+                    'trailing_attempts': trailing_attempts,
+                    'successful_attempt': None
+                }
 
             if not final_validation['valid_50_bounce']:
                 print(f"    ❌ No valid S bounce after final E")
@@ -82,11 +302,12 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
                     'e_point': (final_e_timestamp, final_e_price),
                     'distance_from_d': abs(final_e_price - d_price),
                     'fe_move': abs(final_e_price - f_price),
-                    's_level': s_level,
+                    's_level': final_validation.get('s_level', s_level),
                     'validation': final_validation,
                     'completion': {'pattern_completed': False, 'reason': 'No S bounce after final E'},
                     'found_bounce': False,
                     'pattern_completed': False,
+                    'failed_80_percent': False,
                     'final_valid': False
                 }
                 trailing_attempts.append(attempt_record)
@@ -110,6 +331,7 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
                     'completion': {'pattern_completed': False, 'reason': 'Bounce not at final S level'},
                     'found_bounce': True,
                     'pattern_completed': False,
+                    'failed_80_percent': False,
                     'final_valid': False
                 }
                 trailing_attempts.append(attempt_record)
@@ -117,6 +339,7 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
 
             print(f"    ✅ Fixed S bounce at final S: ${final_s_level:.2f} at {final_bounce_timestamp}")
 
+            # Check completion with 80% failure monitoring
             completion_result = check_pattern_completion_236_extension(
                 prices, dates, final_bounce_timestamp, final_e_price, f_price, direction
             )
@@ -125,6 +348,40 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
             print(f"       F: ${f_price:.2f}")
             print(f"       E: ${final_e_price:.2f}")
             print(f"       S: ${final_s_level:.2f}")
+
+            # Check if completion failed due to 80%
+            if completion_result.get('failed_80_percent', False):
+                print(f"    ❌ PATTERN FAILED: 80% retracement during target approach")
+                attempt_record = {
+                    'candidate_number': i + 1,
+                    'e_point': (final_e_timestamp, final_e_price),
+                    'distance_from_d': abs(final_e_price - d_price),
+                    'fe_move': final_fe_move,
+                    's_level': final_s_level,
+                    'validation': final_validation,
+                    'completion': completion_result,
+                    'found_bounce': True,
+                    'pattern_completed': False,
+                    'failed_80_percent': True,
+                    'final_valid': False
+                }
+                trailing_attempts.append(attempt_record)
+
+                return {
+                    'e_point': (final_e_timestamp, final_e_price),
+                    'validation': final_validation,
+                    'completion': completion_result,
+                    'candidate_number': i + 1,
+                    'total_candidates_tested': i + 1,
+                    'is_valid': False,
+                    'pattern_completed': False,
+                    'failed_80_percent': True,
+                    'failure_info': completion_result,
+                    'distance_from_d': abs(final_e_price - d_price),
+                    'strategy': 'trailing_with_completion',
+                    'trailing_attempts': trailing_attempts,
+                    'successful_attempt': None
+                }
 
             if completion_result['pattern_completed']:
                 print(f"    🏆 PATTERN STATUS: VALID + COMPLETED!")
@@ -141,6 +398,7 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
                 'completion': completion_result,
                 'found_bounce': True,
                 'pattern_completed': completion_result['pattern_completed'],
+                'failed_80_percent': False,
                 'final_valid': True
             }
             trailing_attempts.append(attempt_record)
@@ -153,6 +411,7 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
                 'total_candidates_tested': i + 1,
                 'is_valid': True,
                 'pattern_completed': completion_result['pattern_completed'],
+                'failed_80_percent': False,
                 'distance_from_d': abs(final_e_price - d_price),
                 'strategy': 'trailing_with_completion',
                 'trailing_attempts': trailing_attempts,
@@ -170,30 +429,31 @@ def find_valid_e_with_trailing_strategy_complete(prices, dates, d_timestamp, d_p
                 'completion': {'pattern_completed': False, 'reason': 'No S bounce'},
                 'found_bounce': False,
                 'pattern_completed': False,
+                'failed_80_percent': validation.get('failed_80_percent', False),
                 'final_valid': False
             }
             trailing_attempts.append(attempt_record)
 
     return {
         'e_point': all_e_points[-1] if all_e_points else None,
-        'validation': trailing_attempts[-1]['validation'] if trailing_attempts else {'valid_50_bounce': False,
-                                                                                     'reason': 'No E points found'},
+        'validation': trailing_attempts[-1]['validation'] if trailing_attempts else {
+            'valid_50_bounce': False, 'reason': 'No E points found', 'failed_80_percent': False
+        },
         'completion': {'pattern_completed': False, 'reason': 'No valid S bounce found'},
         'candidate_number': len(all_e_points),
         'total_candidates_tested': len(all_e_points),
         'is_valid': False,
         'pattern_completed': False,
+        'failed_80_percent': False,
         'distance_from_d': abs(all_e_points[-1][1] - d_price) if all_e_points else 0,
         'strategy': 'trailing_with_completion',
         'trailing_attempts': trailing_attempts,
         'successful_attempt': None
     }
-def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.01, min_threshold_pct=1.0):
-    """
-    Analyze fan extension with completion detection (23.6% extension)
-    FIXED: Proper fe_move calculation and S level handling
-    """
-    # Calculate Fibonacci levels
+
+
+def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.001, min_threshold_pct=1.0,
+                                          failure_percentage=0.80):
     fib_levels = calculate_fibonacci_levels(pattern)
 
     # Get D point details
@@ -202,28 +462,29 @@ def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.0
     direction = pattern.get('direction', 'unknown')
 
     print(f"\n{'=' * 70}")
-    print(f"ANALYZING {direction.upper()} PATTERN - WITH COMPLETION DETECTION")
+    print(f"ANALYZING {direction.upper()} PATTERN - WITH COMPLETION & 80% FAILURE DETECTION")
     print(f"{'=' * 70}")
     print(f"  D point: {d_timestamp}, ${d_price:.2f}")
     print(f"  F point (38.2% level): ${fib_levels['38.2']:.2f}")
     print(f"  Target: -23.6% extension for pattern completion")
+    print(f"  Failure: {failure_percentage * 100:.0f}% retracement violation = pattern invalidation")
 
     # Determine search direction
     analysis_key = None
     if direction == 'down':
-        print(f"  🔍 Looking for LOWs (E) → S bounce → completion target")
+        print(f"  Looking for LOWs (E) → S bounce → completion target")
         analysis_key = 'lowest_after_d'
     elif direction == 'up':
-        print(f"  🔍 Looking for HIGHs (E) → S bounce → completion target")
+        print(f"  Looking for HIGHs (E) → S bounce → completion target")
         analysis_key = 'highest_after_d'
     else:
-        print(f"  🔍 Unknown direction, defaulting to HIGH search")
+        print(f"  Unknown direction, defaulting to HIGH search")
         analysis_key = 'highest_after_d'
         direction = 'up'
 
-    # Use ENHANCED TRAILING STRATEGY with completion detection
+    # Use ENHANCED TRAILING STRATEGY with configurable failure criteria
     e_result = find_valid_e_with_trailing_strategy_complete(
-        prices, dates, d_timestamp, d_price, fib_levels, direction, min_change, min_threshold_pct
+        prices, dates, d_timestamp, d_price, fib_levels, direction, min_change, min_threshold_pct, failure_percentage
     )
 
     # Build analysis results
@@ -239,12 +500,102 @@ def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.0
         'min_distance_from_d': d_price * (min_threshold_pct / 100),
         'is_valid': False,
         'pattern_completed': False,
-        'calculation_method': 'Trailing E Point Strategy with 50% retracement and 23.6% completion detection',
-        'strategy': 'trailing_with_completion'
+        'failed_80_percent': False,
+        'recovery_type': None,
+        'calculation_method': 'Trailing E Point Strategy with 50% retracement, 23.6% completion, 80% failure detection, and 100% retracement recovery',
+        'strategy': 'trailing_with_completion_and_recovery'
     }
 
-    if e_result and e_result['is_valid']:
-        # Found valid E point
+    if e_result and e_result.get('failed_80_percent', False):
+        # Pattern failed due to 80% retracement
+        analysis['failed_80_percent'] = True
+        analysis['failure_info'] = e_result.get('failure_info', {})
+        analysis['is_valid'] = False
+        analysis['pattern_completed'] = False
+
+        # Still record the E point for visualization
+        if e_result.get('e_point'):
+            e_point = e_result['e_point']
+            analysis[analysis_key] = e_point
+
+        analysis['validation_info'] = e_result.get('validation', {})
+        analysis['completion_info'] = e_result.get('completion', {})
+        analysis['trailing_attempts'] = e_result.get('trailing_attempts', [])
+
+        # Calculate 80% level for visualization
+        if e_result.get('e_point'):
+            e_timestamp, e_price = e_result['e_point']
+            f_price = fib_levels['38.2']
+            retracement_80 = calculate_80_percent_retracement(f_price, e_price, direction)
+            analysis['retracement_80_level'] = retracement_80
+
+        print(f"\n🚨 PATTERN ANALYSIS COMPLETE - FAILED DUE TO 80% RETRACEMENT!")
+
+        # Show S bounce information if available (even for failed patterns)
+        validation_info = e_result.get('validation', {})
+        if validation_info.get('bounce_point'):
+            bounce_timestamp, bounce_price = validation_info['bounce_point']
+            print(f"  📍 S bounce found: {bounce_timestamp} at ${bounce_price:.2f}")
+            print(f"  📊 S level (50% retracement): ${validation_info.get('s_level', 0):.2f}")
+            print(f"  ⚠️  Pattern had valid S bounce but failed due to excessive retracement")
+
+        failure_info = analysis.get('failure_info', {})
+        if failure_info.get('failure_point'):
+            failure_timestamp, failure_price = failure_info['failure_point']
+            print(f"  📍 Failure point: {failure_timestamp} at ${failure_price:.2f}")
+            print(f"  📊 80% retracement level: ${failure_info.get('failure_level', 0):.2f}")
+            print(f"  📈 Closest approach: ${failure_info.get('closest_approach', 0):.2f}")
+        print(f"  ❌ Pattern invalidated due to excessive retracement")
+
+        # Show recovery information if available
+        if analysis.get('recovery_type') == '100_percent_retracement':
+            print(f"\n🔄 RECOVERY STATUS: 100% retracement recovery attempted")
+            if analysis.get('secondary_attempt'):
+                e2_timestamp, e2_price = analysis['E2']
+                retracement_timestamp, retracement_price = analysis['retracement_point']
+                print(f"  ✅ Recovery successful - New weaker fan pattern created")
+                print(f"  📍 100% retracement: {retracement_timestamp} at ${retracement_price:.2f}")
+                print(f"  📍 New E2: {e2_timestamp} at ${e2_price:.2f}")
+                print(f"  🏷️ Pattern strength: {analysis['strength']}")
+        elif analysis.get('recovery_type') == 'failed':
+            print(f"\n🔄 RECOVERY STATUS: 100% retracement recovery failed")
+            print(f"  ❌ No valid E2 found after 100% retracement")
+
+        # ♻️ Try to recycle with 100% retracement recovery (NEW LOGIC)
+        print(f"\n🔄 Attempting 100% retracement recovery...")
+        recycle_result = recycle_failed_pattern_with_100_percent_retracement(
+            prices, dates,
+            fib_levels['38.2'],  # F price
+            e_point[1],  # failed E price
+            e_point[0],  # failed E timestamp
+            direction,
+            min_threshold_pct
+        )
+        if recycle_result:
+            analysis['secondary_attempt'] = recycle_result
+            analysis['recovery_type'] = '100_percent_retracement'
+            # For plotting convenience
+            analysis['E2'] = recycle_result['E2']
+            analysis['strength'] = recycle_result['strength']
+            analysis['retracement_point'] = recycle_result['retracement_point']
+            analysis['retracement_type'] = recycle_result['retracement_type']
+
+            e2_timestamp, e2_price = recycle_result['E2']
+            retracement_timestamp, retracement_price = recycle_result['retracement_point']
+
+            print(f"♻️ 100% RETRACEMENT RECOVERY SUCCESSFUL!")
+            print(f"   📍 100% retracement: {retracement_timestamp} at ${retracement_price:.2f}")
+            print(f"   📍 New E2 (weaker): {e2_timestamp} at ${e2_price:.2f}")
+            print(f"   📊 F-E2 distance: ${recycle_result['fe2_distance']:.2f}")
+            print(f"   🏷️ Status: {recycle_result['strength']} fan pattern")
+        else:
+            print(f"❌ 100% retracement recovery failed - no valid E2 found")
+            analysis['recovery_type'] = 'failed'
+
+
+
+    elif e_result and e_result['is_valid']:
+        # Found valid E point (no 80% failure)
         e_point = e_result['e_point']
         e_timestamp, e_price = e_point
 
@@ -264,47 +615,47 @@ def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.0
         analysis['completion_info'] = completion_info
         analysis['is_valid'] = True
         analysis['pattern_completed'] = completion_info.get('pattern_completed', False)
+        analysis['failed_80_percent'] = False
         analysis['s_level'] = s_level
         analysis['f_price'] = f_price
         analysis['fe_move'] = fe_move
         analysis['distance_from_d'] = e_result['distance_from_d']
         analysis['trailing_attempts'] = e_result['trailing_attempts']
 
+        # Calculate 80% level for reference
+        retracement_80 = calculate_80_percent_retracement(f_price, e_price, direction)
+        analysis['retracement_80_level'] = retracement_80
+
         # Calculate completion target
         if direction == 'up':
-            # UPTREND: E is above F, target is further above E
-            fe_move_distance = e_price - f_price  # Should be positive
+            fe_move_distance = e_price - f_price
             extension_236 = e_price + (fe_move_distance * 0.236)
         elif direction == 'down':
-            # DOWNTREND: E is below F, target is further below E
-            fe_move_distance = f_price - e_price  # Should be positive
+            fe_move_distance = f_price - e_price
             extension_236 = e_price - (fe_move_distance * 0.236)
         else:
-            # Default uptrend
             fe_move_distance = abs(e_price - f_price)
             extension_236 = e_price + (fe_move_distance * 0.236)
 
         analysis['completion_target'] = extension_236
 
-        print(f"\n🎯 PATTERN ANALYSIS COMPLETE!")
-        print(f"  ✅ Valid E point: ${e_price:.2f}")
-        print(f"  ✅ S bounce confirmed: ${validation_info['bounce_point'][1]:.2f}")
-        print(f"  🎯 Completion target (-23.6%): ${extension_236:.2f}")
+        print(f"\n PATTERN ANALYSIS COMPLETE - VALID!")
+        print(f"  Valid E point: ${e_price:.2f}")
+        print(f"  S bounce confirmed: ${validation_info['bounce_point'][1]:.2f}")
+        print(f"  80% safety level: ${retracement_80:.2f}")
+        print(f"  Completion target (-23.6%): ${extension_236:.2f}")
 
         if completion_info.get('pattern_completed', False):
-            print(f"  🏆 STATUS: VALID + COMPLETED!")
-            print(f"      Target: ${completion_info.get('target_price', 'N/A'):.2f}")
-            print(f"      Actual: ${completion_info.get('actual_price', 'N/A'):.2f}")
-            print(f"      Accuracy: ${completion_info.get('accuracy', 'N/A'):.2f}")
+            print(f"  STATUS: VALID + COMPLETED!")
         else:
-            print(f"  ⏳ STATUS: VALID (waiting for completion)")
-            print(f"      Still monitoring for target: ${extension_236:.2f}")
+            print(f"  STATUS: VALID (waiting for completion)")
 
     else:
-        # Strategy failed
+        # Strategy failed (no valid pattern found, no 80% failure)
         analysis['validation_info'] = e_result.get('validation', {
             'valid_50_bounce': False,
-            'reason': 'No validation data'
+            'reason': 'No validation data',
+            'failed_80_percent': False
         })
         analysis['completion_info'] = e_result.get('completion', {
             'pattern_completed': False,
@@ -312,11 +663,13 @@ def analyze_fan_extension_with_completion(pattern, prices, dates, min_change=0.0
         })
         analysis['is_valid'] = False
         analysis['pattern_completed'] = False
+        analysis['failed_80_percent'] = False
         analysis['trailing_attempts'] = e_result.get('trailing_attempts', [])
 
-        print(f"\n❌ NO VALID PATTERN FOUND")
+        print(f"\n NO VALID PATTERN FOUND")
 
     return analysis
+
 
 def find_valid_e_with_trailing_strategy(prices, dates, d_timestamp, d_price, fib_levels, direction, min_change,
                                         min_threshold_pct):
@@ -352,29 +705,30 @@ def find_valid_e_with_trailing_strategy(prices, dates, d_timestamp, d_price, fib
         )
 
         if validation['valid_50_bounce']:
-            print(f"\n🎯 S BOUNCE FOUND! Now finding ABSOLUTE {direction.upper()} extreme before bounce...")
+            print(f"\n🎯 S BOUNCE FOUND! Now finding {direction.upper()} extreme BEFORE bounce...")
 
             bounce_timestamp = validation['bounce_point'][0]
             bounce_price = validation['bounce_point'][1]
             bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
             d_idx = find_index_from_timestamp(dates, d_timestamp)
 
-            search_prices = prices[d_idx:bounce_idx + 1]
-            search_dates = dates[d_idx:bounce_idx + 1]
+            # Search ONLY from D to the bounce point (not including bounce point)
+            search_prices = prices[d_idx:bounce_idx]
+            search_dates = dates[d_idx:bounce_idx]
 
             if direction == 'up':
                 max_price = max(search_prices)
                 max_idx = search_prices.index(max_price)
                 final_e_timestamp = search_dates[max_idx]
                 final_e_price = max_price
-                print(f"    ✨ ABSOLUTE HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+                print(f"    ✨ HIGHEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
 
             elif direction == 'down':
                 min_price = min(search_prices)
                 min_idx = search_prices.index(min_price)
                 final_e_timestamp = search_dates[min_idx]
                 final_e_price = min_price
-                print(f"    ✨ ABSOLUTE LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
+                print(f"    ✨ LOWEST before bounce: {final_e_timestamp}, ${final_e_price:.2f}")
 
             final_fe_move = final_e_price - f_price
             final_s_level = f_price + (final_fe_move * 0.5)
@@ -455,15 +809,248 @@ def find_valid_e_with_trailing_strategy(prices, dates, d_timestamp, d_price, fib
         'trailing_attempts': trailing_attempts,
         'successful_attempt': None
     }
+
+
+def check_50_percent_bounce_after_e_correct(prices, dates, e_timestamp, e_price, fib_levels, direction,
+                                            min_threshold_pct, failure_percentage=0.80):
+    """
+    Check for the FIRST valid 50% retracement (S point) immediately after E.
+    ENHANCED: Now includes configurable retracement failure criteria.
+
+    Args:
+        failure_percentage: Percentage for failure threshold (default 0.80 = 80%)
+    """
+    e_idx = find_index_from_timestamp(dates, e_timestamp)
+
+    if e_idx >= len(prices) - 1:
+        return {
+            'valid_50_bounce': False,
+            'reason': 'E point at end of data',
+            'failed_80_percent': False
+        }
+
+    f_price = fib_levels['38.2']
+
+    # S = 50% retracement from E back toward F
+    if direction == 'up':
+        s_level = e_price - ((e_price - f_price) * 0.5)
+    elif direction == 'down':
+        s_level = e_price + ((f_price - e_price) * 0.5)
+    else:
+        s_level = (e_price + f_price) / 2
+
+    tolerance = s_level * 0.0002
+
+    print(f"\n  Checking 50% retracement after E (with {failure_percentage * 100:.0f}% failure criteria):")
+    print(f"    F (100% level): ${f_price:.2f}")
+    print(f"    E (0% level): ${e_price:.2f}")
+    print(f"    S (50% retracement): ${s_level:.2f}")
+
+    # Look for the FIRST touch of S after E
+    bounce_found = False
+    bounce_point = None
+
+    for i, price in enumerate(prices[e_idx + 1:], start=e_idx + 1):
+        if abs(price - s_level) <= tolerance:
+            bounce_timestamp = dates[i]
+            bounce_point = (bounce_timestamp, price)
+            bounce_found = True
+            print(f"    FIRST VALID S bounce at {bounce_timestamp}, ${price:.2f}")
+            break
+
+    # Now check for retracement failure AFTER the S bounce (if found)
+    if bounce_found:
+        # Check for failure from the bounce point onwards
+        failure_check = check_80_percent_failure(prices, dates, bounce_point[0], e_price, f_price, direction,
+                                                 failure_percentage=failure_percentage)
+    else:
+        # Check for failure from E point onwards (no bounce found)
+        failure_check = check_80_percent_failure(prices, dates, e_timestamp, e_price, f_price, direction,
+                                                 failure_percentage=failure_percentage)
+
+    if failure_check['failed_80_percent']:
+        print(f"    🚨 PATTERN FAILED: Excessive retracement beyond 80% level")
+        print(f"    📍 Failure point: {failure_check['failure_point'][0]} at ${failure_check['failure_point'][1]:.2f}")
+        print(f"    📊 80% level: ${failure_check['failure_level']:.2f}")
+
+        # Return with bounce information if found
+        result = {
+            'valid_50_bounce': bounce_found,
+            'reason': '80% retracement failure - excessive retracement',
+            'failed_80_percent': True,
+            'failure_info': failure_check,
+            's_level': s_level,
+            'f_price': f_price,
+            'e_price': e_price,
+            'retracement_80_level': failure_check['failure_level']
+        }
+
+        if bounce_found:
+            result['bounce_point'] = bounce_point
+            print(f"    ⚠️  S bounce was found but pattern failed due to excessive retracement")
+
+        return result
+
+    if bounce_found:
+        return {
+            'valid_50_bounce': True,
+            'reason': 'First S touch found after E',
+            'bounce_point': bounce_point,
+            's_level': s_level,
+            'f_price': f_price,
+            'e_price': e_price,
+            'fe_move': abs(e_price - f_price),
+            'direction': direction,
+            'failed_80_percent': False,
+            'retracement_80_level': failure_check['failure_level']
+        }
+
+    print(f"    No bounce found at S level")
+    return {
+        'valid_50_bounce': False,
+        'reason': 'No bounce found at 50% retracement',
+        's_level': s_level,
+        'f_price': f_price,
+        'e_price': e_price,
+        'fe_move': abs(e_price - f_price),
+        'direction': direction,
+        'failed_80_percent': False,
+        'retracement_80_level': failure_check['failure_level']
+    }
+
+
+def check_pattern_completion_236_extension(prices, dates, bounce_timestamp, e_price, f_price, direction):
+    """
+    Check for pattern completion at -23.6% extension from E.
+    ENHANCED: Monitors for 80% retracement failure during target approach.
+    """
+    bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
+
+    if bounce_idx >= len(prices) - 1:
+        return {
+            'pattern_completed': False,
+            'reason': 'S bounce at end of data',
+            'failed_80_percent': False
+        }
+
+    # Calculate extension target
+    if direction == 'up':
+        fe_move_distance = e_price - f_price
+        extension_236 = e_price + (fe_move_distance * 0.236)
+        print(f"\n  🎯 UPTREND Completion Calculation:")
+        print(f"    F (100%): ${f_price:.2f}")
+        print(f"    E (0%): ${e_price:.2f}")
+        print(f"    Target (-23.6%): ${extension_236:.2f} (above E)")
+    elif direction == 'down':
+        fe_move_distance = f_price - e_price
+        extension_236 = e_price - (fe_move_distance * 0.236)
+        print(f"\n  🎯 DOWNTREND Completion Calculation:")
+        print(f"    F (100%): ${f_price:.2f}")
+        print(f"    E (0%): ${e_price:.2f}")
+        print(f"    Target (-23.6%): ${extension_236:.2f} (below E)")
+    else:
+        return {
+            'pattern_completed': False,
+            'reason': 'Unknown direction',
+            'failed_80_percent': False
+        }
+
+    # Get 80% level for monitoring
+    retracement_80 = calculate_80_percent_retracement(f_price, e_price, direction)
+    print(f"  80% failure level: ${retracement_80:.2f}")
+
+    # Search for first target hit after S, while monitoring for 80% failure
+    remaining_prices = prices[bounce_idx + 1:]
+    remaining_dates = dates[bounce_idx + 1:]
+
+    if not remaining_prices:
+        return {
+            'pattern_completed': False,
+            'target_price': extension_236,
+            'direction': direction,
+            'reason': 'No data after S bounce',
+            'failed_80_percent': False
+        }
+
+    for i, price in enumerate(remaining_prices):
+        current_timestamp = remaining_dates[i]
+
+        # First check for 80% failure
+        if direction == 'up' and price <= retracement_80:
+            print(
+                f"    ❌ 80% FAILURE during target approach: ${price:.2f} <= ${retracement_80:.2f} at {current_timestamp}")
+            return {
+                'pattern_completed': False,
+                'target_price': extension_236,
+                'direction': direction,
+                'reason': '80% retracement failure during target approach',
+                'failed_80_percent': True,
+                'failure_point': (current_timestamp, price),
+                'failure_level': retracement_80
+            }
+        elif direction == 'down' and price >= retracement_80:
+            print(
+                f"    ❌ 80% FAILURE during target approach: ${price:.2f} >= ${retracement_80:.2f} at {current_timestamp}")
+            return {
+                'pattern_completed': False,
+                'target_price': extension_236,
+                'direction': direction,
+                'reason': '80% retracement failure during target approach',
+                'failed_80_percent': True,
+                'failure_point': (current_timestamp, price),
+                'failure_level': retracement_80
+            }
+
+        # Then check for target completion
+        if direction == 'up' and price >= extension_236:
+            t_timestamp = current_timestamp
+            t_price = price
+            print(f"    ✅ TARGET HIT at {t_timestamp}, ${t_price:.2f}")
+            return {
+                'pattern_completed': True,
+                'completion_point': (t_timestamp, t_price),
+                'target_price': extension_236,
+                'actual_price': t_price,
+                'accuracy': abs(t_price - extension_236),
+                'direction': direction,
+                'fe_move_distance': fe_move_distance,
+                'reason': 'Target reached (uptrend)',
+                'failed_80_percent': False
+            }
+        elif direction == 'down' and price <= extension_236:
+            t_timestamp = current_timestamp
+            t_price = price
+            print(f"    ✅ TARGET HIT at {t_timestamp}, ${t_price:.2f}")
+            return {
+                'pattern_completed': True,
+                'completion_point': (t_timestamp, t_price),
+                'target_price': extension_236,
+                'actual_price': t_price,
+                'accuracy': abs(t_price - extension_236),
+                'direction': direction,
+                'fe_move_distance': fe_move_distance,
+                'reason': 'Target reached (downtrend)',
+                'failed_80_percent': False
+            }
+
+    print(f"    ⏳ Target not yet reached, no 80% failure detected")
+    return {
+        'pattern_completed': False,
+        'target_price': extension_236,
+        'direction': direction,
+        'fe_move_distance': fe_move_distance,
+        'reason': 'Target -23.6% not reached yet, pattern still valid',
+        'failed_80_percent': False
+    }
+
+
 def plot_pattern_with_completion_analysis(analysis, prices, dates, min_change=0.01):
     """
-    Professional visualization showing F-E-S pattern with completion target
-    UPDATED: Reflects T as the extreme price reaching the -23.6% target
+    Professional visualization showing F-E-S pattern with completion target and CORRECTED 80% failure level
     """
     pattern = analysis['pattern']
     direction = pattern.get('direction', 'unknown')
 
-    # Classic professional setup
     plt.style.use('default')
     fig, ax = plt.subplots(figsize=(22, 12))
     fig.patch.set_facecolor('white')
@@ -529,58 +1116,100 @@ def plot_pattern_with_completion_analysis(analysis, prices, dates, min_change=0.
     ax.axhline(y=f_price, color='#2CA02C', linestyle='--', linewidth=3, alpha=0.8, zorder=3)
     ax.plot(d_timestamp, f_price, 's', color='#2CA02C', markersize=16, zorder=15,
             markeredgecolor='white', markeredgewidth=3)
-    ax.text(d_timestamp, f_price, 'F', ha='center', va='center', fontsize=14,
-            fontweight='black', color='white', zorder=16,
-            path_effects=[pe.withStroke(linewidth=3, foreground='#1B5E1F')])
+    ax.text(d_timestamp, f_price, 'F (100%)', ha='center', va='bottom', fontsize=12,
+            fontweight='bold', color='#2CA02C', zorder=16)
 
-    # S level
-    if analysis.get('s_level') and final_e_point:
+    # E point marking as 0% - E should never be marked as failed
+    if final_e_point:
+        e_timestamp, e_price = final_e_point
+
+        # E point is always valid - it's the reference point
+        e_color = '#228B22'  # Green for E point
+        e_marker = 'D'
+        e_size = 18
+
+        ax.plot(e_timestamp, e_price, e_marker, color=e_color, markersize=e_size, zorder=15,
+                markeredgecolor='white', markeredgewidth=3)
+        ax.text(e_timestamp, e_price, 'E (0%)', ha='center', va='top', fontsize=12,
+                fontweight='bold', color=e_color, zorder=16)
+
+    # S level (50% retracement) - Show even for failed patterns
+    if analysis.get('s_level'):
         s_level = analysis['s_level']
-        ax.axhline(y=s_level, color='#9467BD', linewidth=4, alpha=0.9, zorder=3)
+        # Different styling for failed vs valid patterns
+        if analysis.get('failed_80_percent', False):
+            s_color = '#FF6B35'  # Orange-red for failed patterns
+            s_alpha = 0.7
+        else:
+            s_color = '#9467BD'  # Purple for valid patterns
+            s_alpha = 0.9
+        ax.axhline(y=s_level, color=s_color, linewidth=4, alpha=s_alpha, zorder=3)
 
-    # COMPLETION TARGET LINE (T point target)
+    # CORRECTED 80% RETRACEMENT LEVEL - Between F and E, closer to F
+    retracement_80 = analysis.get('retracement_80_level') or analysis.get('validation_info', {}).get(
+        'retracement_80_level')
+    if retracement_80 and final_e_point:
+        ax.axhline(y=retracement_80, color='#FF4444', linestyle='-.', linewidth=4, alpha=0.9, zorder=3)
+        ax.text(d_timestamp, retracement_80, '80% Retracement', ha='left', va='bottom', fontsize=10,
+                fontweight='bold', color='#FF4444',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFCCCC', alpha=0.8))
+
+    # COMPLETION TARGET LINE
     if analysis.get('completion_target'):
         target_price = analysis['completion_target']
         ax.axhline(y=target_price, color='#FF6B35', linestyle=':', linewidth=3, alpha=0.9, zorder=3)
 
-    # Plot E point
-    if final_e_point:
-        e_timestamp, e_price = final_e_point
-        ax.plot(e_timestamp, e_price, 'D', color='#228B22', markersize=18, zorder=15,
-                markeredgecolor='white', markeredgewidth=3)
-        ax.text(e_timestamp, e_price, 'E', ha='center', va='center', fontsize=16,
-                fontweight='black', color='white', zorder=16,
-                path_effects=[pe.withStroke(linewidth=4, foreground='#006400')])
-
-    # S bounce point
+    # S bounce point - Show even for failed patterns
     validation_info = analysis.get('validation_info', {})
-    if validation_info.get('bounce_point') and analysis.get('s_level'):
+    if validation_info.get('bounce_point'):
         bounce_timestamp, bounce_price = validation_info['bounce_point']
-        s_level = analysis['s_level']
-        ax.plot(bounce_timestamp, bounce_price, '*', color='#DC143C', markersize=20, zorder=20,
+
+        # Different styling for failed vs valid patterns
+        if analysis.get('failed_80_percent', False):
+            # Failed pattern - show S bounce in red/orange
+            bounce_color = '#FF6B35'  # Orange-red for failed patterns
+            bounce_text = 'S (50%) - FAILED'
+            bounce_size = 18
+        else:
+            # Valid pattern - show S bounce in purple
+            bounce_color = '#DC143C'  # Purple for valid patterns
+            bounce_text = 'S (50%)'
+            bounce_size = 20
+
+        ax.plot(bounce_timestamp, bounce_price, '*', color=bounce_color, markersize=bounce_size, zorder=20,
                 markeredgecolor='white', markeredgewidth=3)
-        ax.text(bounce_timestamp, bounce_price, 'S', ha='center', va='center', fontsize=18,
-                fontweight='black', color='white', zorder=21,
-                path_effects=[pe.withStroke(linewidth=4, foreground='#8B0000')])
+        ax.text(bounce_timestamp, bounce_price, bounce_text, ha='center', va='center', fontsize=12,
+                fontweight='bold', color='white', zorder=21,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=bounce_color, alpha=0.8))
+
+    # 80% FAILURE POINT - Show where pattern actually failed
+    if analysis.get('failed_80_percent', False):
+        failure_info = analysis.get('failure_info', {}) or analysis.get('validation_info', {}).get('failure_info', {})
+        if failure_info.get('failure_point'):
+            fail_timestamp, fail_price = failure_info['failure_point']
+            fail_timestamp = pd.to_datetime(fail_timestamp)
+            ax.plot(fail_timestamp, fail_price, 'X', color='#FF0000', markersize=28, zorder=22,
+                    markeredgecolor='white', markeredgewidth=4)
+            ax.text(fail_timestamp, fail_price, 'EXCESSIVE\nRETRACEMENT', ha='center', va='bottom', fontsize=10,
+                    fontweight='bold', color='#FF0000', zorder=23,
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFAAAA', alpha=0.8))
 
     # T point (completion extreme)
     completion_info = analysis.get('completion_info', {})
     if completion_info.get('pattern_completed') and completion_info.get('completion_point'):
         comp_timestamp, comp_price = completion_info['completion_point']
-
-        # Ensure timestamp is pandas datetime (same as your x-axis)
         comp_timestamp = pd.to_datetime(comp_timestamp)
-
         ax.plot(comp_timestamp, comp_price, '*', color='#FFD700', markersize=24, zorder=22,
                 markeredgecolor='white', markeredgewidth=3)
-        ax.text(comp_timestamp, comp_price, 'T', ha='center', va='center', fontsize=18,
-                fontweight='black', color='white', zorder=23,
-                path_effects=[pe.withStroke(linewidth=4, foreground='#B8860B')])
+        ax.text(comp_timestamp, comp_price, 'T (-23.6%)', ha='center', va='center', fontsize=12,
+                fontweight='bold', color='white', zorder=23)
 
     # Draw F-E connection line
-    if analysis.get('is_valid', False) and final_e_point:
+    if final_e_point:
+        line_color = '#FF6666' if analysis.get('failed_80_percent', False) else '#17BECF'
+        line_style = ':' if analysis.get('failed_80_percent', False) else '--'
         ax.plot([d_timestamp, final_e_point[0]], [f_price, final_e_point[1]],
-                color='#17BECF', linewidth=3, alpha=0.8, linestyle='--', zorder=8)
+                color=line_color, linewidth=3, alpha=0.8, linestyle=line_style, zorder=8)
 
     # Enhanced legend
     legend_elements = [
@@ -590,8 +1219,19 @@ def plot_pattern_with_completion_analysis(analysis, prices, dates, min_change=0.
 
     if analysis.get('s_level'):
         s_level = analysis['s_level']
+        if analysis.get('failed_80_percent', False):
+            legend_elements.append(
+                plt.Line2D([0], [0], color='#9467BD', linewidth=4, label=f'S Level (50%) - FAILED: ${s_level:.0f}')
+            )
+        else:
+            legend_elements.append(
+                plt.Line2D([0], [0], color='#9467BD', linewidth=4, label=f'S Level (50%): ${s_level:.0f}')
+            )
+
+    if retracement_80:
         legend_elements.append(
-            plt.Line2D([0], [0], color='#9467BD', linewidth=4, label=f'S Level (50% of F-E): ${s_level:.0f}')
+            plt.Line2D([0], [0], color='#FF4444', linestyle='-.', linewidth=4,
+                       label=f'80% Retracement: ${retracement_80:.0f}')
         )
 
     if analysis.get('completion_target'):
@@ -601,79 +1241,89 @@ def plot_pattern_with_completion_analysis(analysis, prices, dates, min_change=0.
                        label=f'Target (-23.6%): ${target_price:.0f}')
         )
 
-    if analysis.get('is_valid', False) and final_e_point:
-        e_to_f_distance = abs(final_e_point[1] - f_price)
-        legend_elements.append(
-            plt.Line2D([0], [0], color='#17BECF', linestyle='--', linewidth=3,
-                       label=f'E-F Distance: ${e_to_f_distance:.0f}')
-        )
+    if 'E2' in analysis:
+        e2_timestamp, e2_price = analysis['E2']
+        ax.scatter(e2_timestamp, e2_price, c='orange', marker='x', s=80, label='E2 (weaker)')
+        ax.text(e2_timestamp, e2_price, "E2", color="orange", fontsize=10, weight="bold")
+
+        # Draw F–E2 dashed line
+        f_price = analysis.get('f_level')
+        if f_price:
+            ax.plot([analysis['d_timestamp'], e2_timestamp],
+                    [f_price, e2_price],
+                    linestyle="--", color="orange", alpha=0.8, label="F–E2 (weaker)")
 
     legend = ax.legend(handles=legend_elements, loc='upper left', framealpha=0.95,
                        fontsize=11, facecolor='white', edgecolor='gray')
-    legend.get_frame().set_linewidth(1)
 
     # Format chart
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     fig.autofmt_xdate()
 
-    ax.set_xlabel('Time', fontsize=12, fontweight='bold', color='#333333')
-    ax.set_ylabel('Price ($)', fontsize=12, fontweight='bold', color='#333333')
+    ax.set_xlabel('Time', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Price ($)', fontsize=12, fontweight='bold')
 
-    # Enhanced title with completion status
-    pattern_completed = analysis.get('pattern_completed', False)
-
-    if analysis.get('is_valid', False):
-        if pattern_completed:
-            title = f'🏆 {direction.upper()} Pattern - COMPLETED\nF-E-S-T Pattern (T at -23.6% extension)'
-            title_color = '#FFD700'  # Gold for completed
+    # Enhanced title
+    if analysis.get('failed_80_percent', False):
+        title = f'FAILED {direction.upper()} Pattern - Excessive Retracement\nPrice exceeded 80% retracement level'
+        title_color = '#FF0000'
+    elif analysis.get('is_valid', False):
+        if analysis.get('pattern_completed', False):
+            title = f'COMPLETED {direction.upper()} Pattern\nF-E-S-T Pattern (T at -23.6% extension)'
+            title_color = '#FFD700'
         else:
-            title = f'✅ {direction.upper()} Pattern - VALID (Uncompleted)\nF-E-S Pattern Confirmed, Awaiting T'
-            title_color = '#2CA02C'  # Green for valid
+            title = f'VALID {direction.upper()} Pattern (Uncompleted)\nF-E-S Pattern Confirmed, Awaiting T'
+            title_color = '#2CA02C'
     else:
-        title = f'❌ {direction.upper()} Pattern - INVALID\nNo Valid F-E-S Pattern Found'
-        title_color = '#D62728'  # Red for invalid
+        title = f'INVALID {direction.upper()} Pattern\nNo Valid F-E-S Pattern Found'
+        title_color = '#D62728'
 
     ax.text(0.5, 0.98, title, transform=ax.transAxes, fontsize=14, fontweight='bold',
             ha='center', va='top', color=title_color)
 
-    # Professional grid
-    ax.grid(True, which='major', linestyle='-', alpha=0.3, color='#CCCCCC')
-    ax.grid(True, which='minor', linestyle=':', alpha=0.1, color='#DDDDDD')
-
-    # Clean axes styling
-    for spine in ax.spines.values():
-        spine.set_color('#888888')
-        spine.set_linewidth(1)
-
-    ax.tick_params(colors='#333333', which='both')
-
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
 
-    # Enhanced console output
+    # Console output
     print("=" * 70)
-    if analysis.get('is_valid', False):
-        if pattern_completed:
-            print("🏆 PATTERN STATUS: VALID + COMPLETED")
+    if analysis.get('failed_80_percent', False):
+        print("PATTERN STATUS: FAILED - EXCESSIVE RETRACEMENT")
+        failure_info = analysis.get('failure_info', {}) or analysis.get('validation_info', {}).get('failure_info', {})
+        print(f"  80% Retracement Level: ${retracement_80:.2f}")
+
+        # Show S bounce information for failed patterns
+        validation_info = analysis.get('validation_info', {})
+        if validation_info.get('bounce_point'):
+            bounce_timestamp, bounce_price = validation_info['bounce_point']
+            print(f"  S Bounce Found: {bounce_timestamp} at ${bounce_price:.2f}")
+            print(f"  S Level (50%): ${validation_info.get('s_level', 0):.2f}")
+            print(f"  ⚠️  Pattern had valid S bounce but failed due to excessive retracement")
+
+        print(f"  Pattern failed due to excessive retracement beyond 80% level")
+        if failure_info.get('failure_point'):
+            fail_timestamp, fail_price = failure_info['failure_point']
+            print(f"  Failure Point: {fail_timestamp} at ${fail_price:.2f}")
+    elif analysis.get('is_valid', False):
+        if analysis.get('pattern_completed', False):
+            print("PATTERN STATUS: VALID + COMPLETED")
             comp_info = analysis['completion_info']
-            print(f"  ✅ E Point: ${final_e_point[1]:.2f}")
-            s_level = analysis.get('s_level', 0)
-            print(f"  ✅ S Bounce (50% of F-E): ${s_level:.2f}")
-            print(f"  🎯 T Target (-23.6%): ${comp_info['target_price']:.2f}")
-            print(f"  🏆 T Point (Extreme): ${comp_info['actual_price']:.2f}")
-            print(f"  📊 Accuracy: ${comp_info['accuracy']:.2f}")
+            print(f"  E Point (0%): ${final_e_point[1]:.2f}")
+            print(f"  S Bounce (50%): ${analysis.get('s_level', 0):.2f}")
+            print(f"  80% Safety Level: ${retracement_80:.2f}")
+            print(f"  T Target (-23.6%): ${comp_info['target_price']:.2f}")
+            print(f"  T Point: ${comp_info['actual_price']:.2f}")
         else:
-            print("✅ PATTERN STATUS: VALID (UNCOMPLETED)")
-            print(f"  ✅ E Point: ${final_e_point[1]:.2f}")
-            s_level = analysis.get('s_level', 0)
-            print(f"  ✅ S Bounce (50% of F-E): ${s_level:.2f}")
-            print(f"  ⏳ T Target (-23.6%): ${analysis['completion_target']:.2f}")
-            print(f"  📈 Status: Monitoring for completion")
+            print("PATTERN STATUS: VALID (UNCOMPLETED)")
+            print(f"  E Point (0%): ${final_e_point[1]:.2f}")
+            print(f"  S Bounce (50%): ${analysis.get('s_level', 0):.2f}")
+            print(f"  80% Safety Level: ${retracement_80:.2f}")
+            print(f"  T Target (-23.6%): ${analysis['completion_target']:.2f}")
     else:
-        print("❌ PATTERN STATUS: INVALID")
-        print(f"  🔍 No valid F-E-S pattern found")
+        print("PATTERN STATUS: INVALID")
     print("=" * 70)
+
 
 def find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, direction, min_threshold_pct=1.0):
     """
@@ -740,6 +1390,7 @@ def find_all_e_points_after_d(prices, dates, d_timestamp, d_price, min_change, d
 
     print(f"  Found {len(e_points)} potential E points after D (meeting both change and distance criteria)")
     return e_points
+
 
 def find_index_from_timestamp(dates, target_timestamp):
     """Find the index corresponding to a timestamp"""
@@ -855,155 +1506,6 @@ def find_lowest_after_d(prices, dates, d_timestamp, d_price, min_change):
             return (dates[i], current_price)
     return None
 
-def check_50_percent_bounce_after_e_correct(prices, dates, e_timestamp, e_price, fib_levels, direction, min_threshold_pct):
-    """
-    Check for the FIRST valid 50% retracement (S point) immediately after E.
-    S is strictly defined as the midpoint between E and F.
-    The very first touch of S (within tolerance) after E is accepted as the bounce.
-    """
-    e_idx = find_index_from_timestamp(dates, e_timestamp)
-
-    # If E is the last point in data, fail early
-    if e_idx >= len(prices) - 1:
-        return {
-            'valid_50_bounce': False,
-            'reason': 'E point at end of data'
-        }
-
-    # F = 38.2% level
-    f_price = fib_levels['38.2']
-
-    # S = 50% retracement from E back toward F
-    if direction == 'up':
-        s_level = e_price - ((e_price - f_price) * 0.5)
-    elif direction == 'down':
-        s_level = e_price + ((f_price - e_price) * 0.5)
-    else:
-        s_level = (e_price + f_price) / 2
-
-    tolerance = s_level * 0.0002  # 0.02% tolerance
-
-    print(f"\n  Checking 50% retracement after E:")
-    print(f"    F (38.2% level): ${f_price:.2f}")
-    print(f"    E: ${e_price:.2f}")
-    print(f"    S (50% retracement): ${s_level:.2f}")
-    print(f"    Tolerance: ±${tolerance:.2f}")
-
-    # Look for the FIRST touch of S after E
-    for i, price in enumerate(prices[e_idx+1:], start=e_idx+1):
-        if abs(price - s_level) <= tolerance:
-            bounce_timestamp = dates[i]
-            bounce_point = (bounce_timestamp, price)
-            print(f"    🎯 FIRST VALID S bounce at {bounce_timestamp}, ${price:.2f}")
-            return {
-                'valid_50_bounce': True,
-                'reason': 'First S touch found immediately after E',
-                'bounce_point': bounce_point,
-                's_level': s_level,
-                'f_price': f_price,
-                'e_price': e_price,
-                'fe_move': abs(e_price - f_price),
-                'direction': direction
-            }
-
-    # If no bounce found
-    print(f"    ❌ No bounce found at S level")
-    return {
-        'valid_50_bounce': False,
-        'reason': 'No bounce found at 50% retracement',
-        's_level': s_level,
-        'f_price': f_price,
-        'e_price': e_price,
-        'fe_move': abs(e_price - f_price),
-        'direction': direction
-    }
-
-
-def check_pattern_completion_236_extension(prices, dates, bounce_timestamp, e_price, f_price, direction):
-    """
-    Check for pattern completion at -23.6% extension from E.
-    T point = the FIRST time price reaches the -23.6% extension target after S bounce.
-    """
-    bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
-
-    if bounce_idx >= len(prices) - 1:
-        return {
-            'pattern_completed': False,
-            'reason': 'S bounce at end of data'
-        }
-
-    # Calculate extension target
-    if direction == 'up':
-        fe_move_distance = e_price - f_price  # Positive
-        extension_236 = e_price + (fe_move_distance * 0.236)
-        print(f"\n  🎯 UPTREND Completion Calculation:")
-        print(f"    F (100%): ${f_price:.2f}")
-        print(f"    E (0%): ${e_price:.2f}")
-        print(f"    Target (-23.6%): ${extension_236:.2f} (above E)")
-    elif direction == 'down':
-        fe_move_distance = f_price - e_price  # Positive
-        extension_236 = e_price - (fe_move_distance * 0.236)
-        print(f"\n  🎯 DOWNTREND Completion Calculation:")
-        print(f"    F (100%): ${f_price:.2f}")
-        print(f"    E (0%): ${e_price:.2f}")
-        print(f"    Target (-23.6%): ${extension_236:.2f} (below E)")
-    else:
-        return {
-            'pattern_completed': False,
-            'reason': 'Unknown direction'
-        }
-
-    # Search for first target hit after S
-    remaining_prices = prices[bounce_idx + 1:]
-    remaining_dates = dates[bounce_idx + 1:]
-
-    if not remaining_prices:
-        return {
-            'pattern_completed': False,
-            'target_price': extension_236,
-            'direction': direction,
-            'reason': 'No data after S bounce'
-        }
-
-    for i, price in enumerate(remaining_prices):
-        if direction == 'up' and price >= extension_236:
-            t_timestamp = remaining_dates[i]
-            t_price = price
-            print(f"    ✅ TARGET HIT at {t_timestamp}, ${t_price:.2f}")
-            return {
-                'pattern_completed': True,
-                'completion_point': (t_timestamp, t_price),  # T point
-                'target_price': extension_236,
-                'actual_price': t_price,
-                'accuracy': abs(t_price - extension_236),
-                'direction': direction,
-                'fe_move_distance': fe_move_distance,
-                'reason': 'Target reached (uptrend)'
-            }
-        elif direction == 'down' and price <= extension_236:
-            t_timestamp = remaining_dates[i]
-            t_price = price
-            print(f"    ✅ TARGET HIT at {t_timestamp}, ${t_price:.2f}")
-            return {
-                'pattern_completed': True,
-                'completion_point': (t_timestamp, t_price),  # T point
-                'target_price': extension_236,
-                'actual_price': t_price,
-                'accuracy': abs(t_price - extension_236),
-                'direction': direction,
-                'fe_move_distance': fe_move_distance,
-                'reason': 'Target reached (downtrend)'
-            }
-
-    # If never hit
-    print(f"    ⏳ Target not yet reached")
-    return {
-        'pattern_completed': False,
-        'target_price': extension_236,
-        'direction': direction,
-        'fe_move_distance': fe_move_distance,
-        'reason': 'Target -23.6% not reached yet'
-    }
 
 def plot_pattern_with_extension(analysis, prices, dates, min_change=0.01):
     """
@@ -1156,7 +1658,7 @@ def plot_pattern_with_extension(analysis, prices, dates, min_change=0.01):
 
             # Add midpoint marker on F-E line
             mid_timestamp = pd.to_datetime(d_timestamp) + (
-                        pd.to_datetime(e_timestamp) - pd.to_datetime(d_timestamp)) / 2
+                    pd.to_datetime(e_timestamp) - pd.to_datetime(d_timestamp)) / 2
             mid_price = f_price + (e_price - f_price) / 2
             plt.plot(mid_timestamp, mid_price, 'D', color='cyan', markersize=8, zorder=6,
                      markeredgecolor='darkcyan', markeredgewidth=1)
@@ -1367,6 +1869,134 @@ def plot_all_key_points_detail(analysis, prices, dates):
     plt.show()
 
 
+def recycle_failed_pattern_with_same_F(prices, dates, f_price, failed_e_price, failed_e_timestamp,
+                                       direction, min_threshold_pct=1.0, failure_percentage=0.80):
+    """
+    After failure, keep F fixed and try to find a new E2 when price pushes far enough from F again.
+    Mark this new attempt as 'weaker'.
+    """
+    f_idx = find_index_from_timestamp(dates, failed_e_timestamp)  # continue search after failed E
+    fe2_threshold = abs(failed_e_price - f_price) * (min_threshold_pct / 100)
+
+    for i in range(f_idx + 1, len(prices)):
+        current_price = prices[i]
+
+        if direction == 'up' and current_price - f_price >= fe2_threshold:
+            return {
+                'E2': (dates[i], current_price),
+                'status': 'secondary',
+                'strength': 'weaker'
+            }
+        elif direction == 'down' and f_price - current_price >= fe2_threshold:
+            return {
+                'E2': (dates[i], current_price),
+                'status': 'secondary',
+                'strength': 'weaker'
+            }
+
+    return {
+        'E2': (dates[i], current_price),
+        'status': 'secondary',
+        'strength': 'weaker'
+    }
+
+
+def recycle_failed_pattern_with_100_percent_retracement(prices, dates, f_price, failed_e_price, failed_e_timestamp,
+                                                        direction, min_threshold_pct=1.0):
+    """
+    NEW: After 80% retracement failure, wait for 100% retracement and start over from same F to the highest.
+    This creates a 'weaker' fan pattern.
+    """
+    f_idx = find_index_from_timestamp(dates, failed_e_timestamp)
+
+    # Calculate 100% retracement level (price returns to F level)
+    if direction == 'up':
+        # For up pattern, 100% retracement means price falls back to F level
+        target_retracement = f_price
+        tolerance = f_price * 0.001  # 0.1% tolerance
+
+        # Look for price to return to F level (100% retracement)
+        for i in range(f_idx + 1, len(prices)):
+            current_price = prices[i]
+            if current_price <= target_retracement + tolerance:
+                # Found 100% retracement, now look for new E2 (highest after retracement)
+                retracement_idx = i
+                print(f"    ♻️ Found 100% retracement at {dates[i]}, ${current_price:.2f}")
+
+                # Search for new E2 (highest point after retracement)
+                search_prices = prices[retracement_idx:]
+                search_dates = dates[retracement_idx:]
+
+                if search_prices:
+                    max_price = max(search_prices)
+                    max_idx = search_prices.index(max_price)
+                    new_e2_timestamp = search_dates[max_idx]
+                    new_e2_price = max_price
+
+                    # Check if new E2 is far enough from F
+                    fe2_distance = new_e2_price - f_price
+                    min_distance = f_price * (min_threshold_pct / 100)
+
+                    if fe2_distance >= min_distance:
+                        return {
+                            'E2': (new_e2_timestamp, new_e2_price),
+                            'status': 'recovered_100_percent',
+                            'strength': 'weaker',
+                            'retracement_point': (dates[retracement_idx], current_price),
+                            'retracement_type': '100_percent',
+                            'fe2_distance': fe2_distance,
+                            'min_distance_required': min_distance
+                        }
+                    else:
+                        print(f"    ❌ New E2 at ${new_e2_price:.2f} too close to F (${f_price:.2f})")
+                        return None
+                break
+
+    elif direction == 'down':
+        # For down pattern, 100% retracement means price rises back to F level
+        target_retracement = f_price
+        tolerance = f_price * 0.001  # 0.1% tolerance
+
+        # Look for price to return to F level (100% retracement)
+        for i in range(f_idx + 1, len(prices)):
+            current_price = prices[i]
+            if current_price >= target_retracement - tolerance:
+                # Found 100% retracement, now look for new E2 (lowest after retracement)
+                retracement_idx = i
+                print(f"    ♻️ Found 100% retracement at {dates[i]}, ${current_price:.2f}")
+
+                # Search for new E2 (lowest point after retracement)
+                search_prices = prices[retracement_idx:]
+                search_dates = dates[retracement_idx:]
+
+                if search_prices:
+                    min_price = min(search_prices)
+                    min_idx = search_prices.index(min_price)
+                    new_e2_timestamp = search_dates[min_idx]
+                    new_e2_price = min_price
+
+                    # Check if new E2 is far enough from F
+                    fe2_distance = f_price - new_e2_price
+                    min_distance = f_price * (min_threshold_pct / 100)
+
+                    if fe2_distance >= min_distance:
+                        return {
+                            'E2': (new_e2_timestamp, new_e2_price),
+                            'status': 'recovered_100_percent',
+                            'strength': 'weaker',
+                            'retracement_point': (dates[retracement_idx], current_price),
+                            'retracement_type': '100_percent',
+                            'fe2_distance': fe2_distance,
+                            'min_distance_required': min_distance
+                        }
+                    else:
+                        print(f"    ❌ New E2 at ${new_e2_price:.2f} too close to F (${f_price:.2f})")
+                        return None
+                break
+
+    return None
+
+
 def get_completed_patterns_for_date(date_str, min_change=0.01, min_threshold_pct=1.0):
     """
     Load data for a specific date and get all completed patterns with TRAILING STRATEGY
@@ -1442,6 +2072,7 @@ def get_completed_patterns_for_date(date_str, min_change=0.01, min_threshold_pct
         'total_patterns': len(completed_patterns),
         'successful_patterns': 0,
         'failed_patterns': 0,
+        'recovered_patterns': 0,
         'total_attempts_across_all': 0,
         'average_attempts_per_pattern': 0
     }
@@ -1475,8 +2106,13 @@ def get_completed_patterns_for_date(date_str, min_change=0.01, min_threshold_pct
             successful_attempt = extension_analysis.get('successful_attempt', 1)
             print(f"\n🎯 PATTERN {i + 1} SUCCESS - Found valid extension after {successful_attempt} attempts")
         else:
-            trailing_summary['failed_patterns'] += 1
-            print(f"\n❌ PATTERN {i + 1} FAILED - No valid extension found after {len(trailing_attempts)} attempts")
+            if extension_analysis.get('recovery_type') == '100_percent_retracement':
+                trailing_summary['recovered_patterns'] += 1
+                print(
+                    f"\n🔄 PATTERN {i + 1} RECOVERED - 100% retracement recovery successful after {len(trailing_attempts)} attempts")
+            else:
+                trailing_summary['failed_patterns'] += 1
+                print(f"\n❌ PATTERN {i + 1} FAILED - No valid extension found after {len(trailing_attempts)} attempts")
 
         print(f"\n📊 Pattern {i + 1} Results:")
         print(f"    38.2% Level: ${extension_analysis['retracement_382_level']:.2f}")
@@ -1485,6 +2121,16 @@ def get_completed_patterns_for_date(date_str, min_change=0.01, min_threshold_pct
         print(f"    Min Distance from D: ${extension_analysis.get('min_distance_from_d', 0):.2f}")
         print(f"    Valid: {extension_analysis['is_valid']}")
         print(f"    E candidates tested: {len(trailing_attempts)}")
+
+        # Show recovery information
+        if extension_analysis.get('recovery_type') == '100_percent_retracement':
+            print(f"    Recovery: 100% retracement recovery successful")
+            if extension_analysis.get('E2'):
+                e2_timestamp, e2_price = extension_analysis['E2']
+                print(f"    New E2: {e2_timestamp} at ${e2_price:.2f}")
+                print(f"    Pattern strength: {extension_analysis.get('strength', 'unknown')}")
+        elif extension_analysis.get('recovery_type') == 'failed':
+            print(f"    Recovery: 100% retracement recovery failed")
 
         if extension_analysis['is_valid']:
             if extension_analysis.get('lowest_after_d'):
@@ -1525,9 +2171,14 @@ def get_completed_patterns_for_date(date_str, min_change=0.01, min_threshold_pct
     print(f"📊 Overall Statistics:")
     print(f"  Total patterns analyzed: {trailing_summary['total_patterns']}")
     print(f"  Successful patterns: {trailing_summary['successful_patterns']}")
+    print(f"  Recovered patterns (100% retracement): {trailing_summary['recovered_patterns']}")
     print(f"  Failed patterns: {trailing_summary['failed_patterns']}")
+    total_successful = trailing_summary['successful_patterns'] + trailing_summary['recovered_patterns']
+    print(f"  Total successful + recovered: {total_successful}")
     print(
         f"  Success rate: {(trailing_summary['successful_patterns'] / trailing_summary['total_patterns'] * 100):.1f}%")
+    print(
+        f"  Success + Recovery rate: {(total_successful / trailing_summary['total_patterns'] * 100):.1f}%")
     print(f"  Total E candidates tested across all patterns: {trailing_summary['total_attempts_across_all']}")
     print(f"  Average E candidates per pattern: {trailing_summary['average_attempts_per_pattern']:.1f}")
 
@@ -1541,16 +2192,18 @@ def get_completed_patterns_for_date(date_str, min_change=0.01, min_threshold_pct
         "total_patterns": len(all_patterns),
         "completed_count": len(completed_patterns),
         "valid_extensions": trailing_summary['successful_patterns'],
+        "recovered_extensions": trailing_summary['recovered_patterns'],
         "failed_extensions": trailing_summary['failed_patterns'],
         "threshold_used": min_threshold_pct,
-        "strategy": "trailing",
+        "strategy": "trailing_with_recovery",
         "trailing_summary": trailing_summary,
         "ready_for_fan_extension": True
     }
 
+
 if __name__ == "__main__":
     # Example usage with trailing strategy
-    date_to_analyze = "2025-07-22"
+    date_to_analyze = "2025-08-23"
     params = load_parameters()
     min_change = params.get('min_change', 0.001)
     min_threshold_pct = params.get('min_threshold_pct', 0.001)  # Default 1%
@@ -1562,18 +2215,23 @@ if __name__ == "__main__":
     results = get_completed_patterns_for_date(date_to_analyze, min_change, min_threshold_pct)
 
     if results["status"] == "success":
-        print(f"\n🎯 TRAILING STRATEGY COMPLETED!")
+        print(f"\n🎯 TRAILING STRATEGY WITH RECOVERY COMPLETED!")
         print(f"Found {results['completed_count']} completed patterns")
         print(f"Valid extensions: {results['valid_extensions']}")
+        print(f"Recovered extensions (100% retracement): {results['recovered_extensions']}")
         print(f"Failed extensions: {results['failed_extensions']}")
-        print(f"Success rate: {(results['valid_extensions']/results['completed_count']*100):.1f}%")
+        total_successful = results['valid_extensions'] + results['recovered_extensions']
+        print(f"Total successful + recovered: {total_successful}")
+        print(f"Success rate: {(results['valid_extensions'] / results['completed_count'] * 100):.1f}%")
+        print(f"Success + Recovery rate: {(total_successful / results['completed_count'] * 100):.1f}%")
         print(f"Strategy: {results['strategy']}")
 
         if show_plots and results['extension_analyses']:
             print("\n📈 Generating plots for patterns with trailing analysis...")
             for i, analysis in enumerate(results['extension_analyses']):
                 if analysis.get('lowest_after_d') or analysis.get('highest_after_d'):
-                    print(f"\nPlotting pattern {i + 1} (trailing attempts: {len(analysis.get('trailing_attempts', []))})...")
+                    print(
+                        f"\nPlotting pattern {i + 1} (trailing attempts: {len(analysis.get('trailing_attempts', []))})...")
                     plot_pattern_with_completion_analysis(analysis, results['prices'], results['dates'], min_change)
     else:
         print(f"❌ Error: {results['status']}")

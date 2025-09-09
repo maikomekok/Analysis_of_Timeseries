@@ -200,35 +200,7 @@ def debug_coordinates(date_str, data_file=None):
                         print(f"    {point_name}: {local_idx} + {window_start} = {global_idx} ❌ OUT OF RANGE")
 
 
-def test_frontend_coordinate_format():
-    """Test the coordinate format that should be sent to frontend"""
-    print(f"\n🌐 FRONTEND COORDINATE FORMAT TEST")
-    print("-" * 60)
-
-    # Simulate what the frontend expects
-    sample_pattern = {
-        'direction': 'up',
-        'status': 'completed',
-        'A': [100, 85000.50],  # [index, price]
-        'B': [200, 86500.75],
-        'C': [300, 85750.25],
-        'D': [400, 87000.00]
-    }
-
-    print("Expected format for frontend:")
-    print("  Pattern points should be: [global_index, price]")
-    print("  Where global_index corresponds to position in the full price/timestamp arrays")
-    print()
-    print("Example:")
-    for point_name, (index, price) in sample_pattern.items():
-        if point_name in ['A', 'B', 'C', 'D']:
-            print(f"  {point_name}: [{index}, {price}] ← index {index} in full dataset")
-
-    print("\n⚠️ Common mistakes:")
-    print("  ❌ Using window-local indices without conversion")
-    print("  ❌ Index >= timestamp array length")
-    print("  ❌ Negative indices")
-    print("  ❌ Price doesn't match price array at that index")
+ 
 
 
 def main():
@@ -243,7 +215,6 @@ def main():
     data_file = sys.argv[2] if len(sys.argv) > 2 else None
 
     debug_coordinates(date_str, data_file)
-    test_frontend_coordinate_format()
 
 
 if __name__ == "__main__":

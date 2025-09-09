@@ -186,11 +186,10 @@ def find_accurate_failure_point_global(pattern, prices, dates, config):
 
     return pattern
 
-
 def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_change_pct, config):
     """
     Find all valid patterns starting from a specific A point
-    Uses your existing config system - no separate parameters
+    Modified so B is always the absolute extreme (highest high / lowest low) before C
     """
     patterns = []
 
@@ -198,8 +197,8 @@ def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_chang
     retracement_tolerance = config.get("retracement_tolerance", 0.02)
     completion_extension = config.get("completion_extension", 0.236)
     failure_level = config.get("failure_level", 0.764)
-    min_move_multiplier = config.get("min_move_multiplier", 2.0)
 
+    # Pick A point: global low for uptrend, global high for downtrend
     if direction == "up":
         A_idx = prices.index(min(prices))
         A_price = prices[A_idx]
@@ -209,75 +208,44 @@ def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_chang
 
     print(f"  Using GLOBAL {'MIN' if direction == 'up' else 'MAX'} for A: Index {A_idx}, Price ${A_price:.2f}")
 
-    valid_B_candidates = []
+    best_B = None
+    best_C = None
 
-    for B_idx in range(A_idx + 1, len(prices)):
-        B_price = prices[B_idx]
-
+    # Step 1: Loop through possible C points
+    for C_idx in range(A_idx + 2, len(prices)):
+        # 🔑 NEW: absolute extreme B between A and C
         if direction == "up":
-            move_AB = B_price - A_price
-            if move_AB <= 0:
-                continue
-        else:  # down
-            move_AB = A_price - B_price
-            if move_AB <= 0:
-                continue
+            B_idx = max(range(A_idx + 1, C_idx), key=lambda i: prices[i], default=None)
+        else:
+            B_idx = min(range(A_idx + 1, C_idx), key=lambda i: prices[i], default=None)
 
-        move_pct = (move_AB / A_price) * 100
-        if move_pct < min_change_pct * min_move_multiplier * 100:
+        if B_idx is None:
             continue
 
-        if direction == "up":
-            target_C_price = B_price - move_AB * retracement_target
-        else:
-            target_C_price = B_price + move_AB * retracement_target
+        B_price = prices[B_idx]
+        move_AB = B_price - A_price if direction == "up" else A_price - B_price
+        if move_AB <= 0:
+            continue
 
+        # target retracement for C
+        target_C_price = (B_price - move_AB * retracement_target
+                          if direction == "up"
+                          else B_price + move_AB * retracement_target)
         tolerance_range = move_AB * retracement_tolerance
-        min_C_price = target_C_price - tolerance_range
-        max_C_price = target_C_price + tolerance_range
 
-        # Look for valid C
-        valid_C_found = None
-        for i in range(B_idx + 1, len(prices)):
-            if min_C_price <= prices[i] <= max_C_price:
-                valid_C_found = (i, prices[i])
-                break
+        if abs(prices[C_idx] - target_C_price) <= tolerance_range:
+            # ✅ Found valid C with absolute extreme B
+            best_B = (B_idx, B_price)
+            best_C = (C_idx, prices[C_idx])
+            break  # stop at first valid extreme C
 
-        if valid_C_found:
-            C_idx, C_price = valid_C_found
-            valid_B_candidates.append({
-                'B_idx': B_idx,
-                'B_price': B_price,
-                'move_AB': move_AB,
-                'move_pct': move_pct,
-                'C_idx': C_idx,
-                'C_price': C_price,
-                'target_C_price': target_C_price
-            })
+    # Step 2: If we found valid B and C → continue to D search
+    if best_B and best_C:
+        B_idx, B_price = best_B
+        C_idx, C_price = best_C
 
-    if not valid_B_candidates:
-        return patterns
-
-    if direction == "up":
-        valid_B_candidates.sort(key=lambda x: x['B_price'], reverse=True)
-    else:
-        valid_B_candidates.sort(key=lambda x: x['B_price'])
-
-    # Create patterns from top candidates
-    for i, candidate in enumerate(valid_B_candidates[:1]):  # Top 3 candidates
-
-        B_idx = candidate['B_idx']
-        B_price = candidate['B_price']
-        move_AB = candidate['move_AB']
-        move_pct = candidate['move_pct']
-        C_idx = candidate['C_idx']
-        C_price = candidate['C_price']
-
-        if direction == "up":
-            actual_retracement = B_price - C_price
-        else:
-            actual_retracement = C_price - B_price
-
+        move_AB = B_price - A_price if direction == "up" else A_price - B_price
+        actual_retracement = (B_price - C_price) if direction == "up" else (C_price - B_price)
         retracement_pct = (actual_retracement / move_AB) * 100
 
         if direction == "up":
@@ -287,77 +255,56 @@ def find_patterns_from_point(prices, dates, A_idx, A_price, direction, min_chang
             failure_level_price = B_price + move_AB * failure_level
             completion_level_price = B_price - move_AB * completion_extension
 
-        # Find D point and status - search through ENTIRE dataset for accuracy
-        pattern_status = None
-        D_idx = None
-        D_price = None
+        # Step 3: Find D point
+        D_idx, D_price, pattern_status = None, None, None
+        for j in range(C_idx + 1, len(prices)):
+            price = prices[j]
+            if direction == "up":
+                if price < failure_level_price:
+                    D_idx, D_price, pattern_status = j, price, "failed"
+                    break
+                elif price >= completion_level_price:
+                    D_idx, D_price, pattern_status = j, price, "completed"
+                    break
+            else:  # down
+                if price > failure_level_price:
+                    D_idx, D_price, pattern_status = j, price, "failed"
+                    break
+                elif price <= completion_level_price:
+                    D_idx, D_price, pattern_status = j, price, "completed"
+                    break
 
-        if C_idx + 1 < len(prices):
-            # Search through ALL remaining data, not just a window
-            for j in range(C_idx + 1, len(prices)):
-                price = prices[j]
-
-                # Check for failure or completion based on direction
-                if direction == "up":
-                    if price < failure_level_price:
-                        D_idx = j
-                        D_price = price
-                        pattern_status = "failed"
-                        break
-                    elif price >= completion_level_price:
-                        D_idx = j
-                        D_price = price
-                        pattern_status = "completed"
-                        break
-                else:  # down
-                    if price > failure_level_price:
-                        D_idx = j
-                        D_price = price
-                        pattern_status = "failed"
-                        break
-                    elif price <= completion_level_price:
-                        D_idx = j
-                        D_price = price
-                        pattern_status = "completed"
-                        break
-
-        # Create pattern ONLY if definitive status found (completed or failed)
+        # Step 4: Build pattern dict if definitive D found
         if pattern_status in ['completed', 'failed'] and D_price is not None:
-
-            # Validate D position relative to A
             valid_D = False
             if direction == "up":
                 valid_D = (pattern_status == "failed") or (D_price > A_price)
             else:
                 valid_D = (pattern_status == "failed") or (D_price < A_price)
 
-            if pattern_status in ['completed', 'failed'] and D_price is not None:
-                if valid_D:
-                    pattern = {
-                        "direction": direction,
-                        "A": (dates[A_idx], A_price),  # NEW: timestamp-based
-                        "B": (dates[B_idx], B_price),  # NEW: timestamp-based
-                        "C": (dates[C_idx], C_price),  # NEW: timestamp-based
-                        "D": (dates[D_idx], D_price),  # NEW: timestamp-based
-                        "initial_move_pct": move_pct,
-                        "retracement_pct": retracement_pct,
-                        "target_level": candidate['target_C_price'],
-                        "failure_level": failure_level_price,
-                        "completion_level": completion_level_price,
-                        "status": pattern_status,
-                        "pattern_rank": i + 1,
-                        "pattern_type": "comprehensive",
-                        "A_type": "absolute" if A_idx in [prices.index(min(prices)),
-                                                          prices.index(max(prices))] else "local",
-                        "searched_full_dataset": True
-                    }
+            if valid_D:
+                pattern = {
+                    "direction": direction,
+                    "A": (dates[A_idx], A_price),
+                    "B": (dates[B_idx], B_price),
+                    "C": (dates[C_idx], C_price),
+                    "D": (dates[D_idx], D_price),
+                    "initial_move_pct": (move_AB / A_price) * 100,
+                    "retracement_pct": retracement_pct,
+                    "target_level": target_C_price,
+                    "failure_level": failure_level_price,
+                    "completion_level": completion_level_price,
+                    "status": pattern_status,
+                    "pattern_rank": 1,
+                    "pattern_type": "comprehensive",
+                    "A_type": "absolute" if A_idx in [prices.index(min(prices)), prices.index(max(prices))] else "local",
+                    "searched_full_dataset": True
+                }
                 patterns.append(pattern)
 
-                print(f"    {direction.upper()} pattern created (rank #{i + 1}, {pattern_status}):")
-                print(f"      A: ${A_price:.2f}, B: ${B_price:.2f}, C: ${C_price:.2f}, D: ${D_price:.2f}")
+                print(f"    {direction.upper()} pattern created: A=${A_price:.2f}, B=${B_price:.2f}, C=${C_price:.2f}, D=${D_price:.2f}")
 
     return patterns
-
 
 def find_opposite_overlapping_patterns(prices, dates, reference_pattern, min_change_pct, config):
     """
