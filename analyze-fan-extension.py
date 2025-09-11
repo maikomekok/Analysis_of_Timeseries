@@ -7,7 +7,8 @@ import json
 import os
 from analyze import (
     load_and_prepare_data,
-    analyze_multiple_windows
+    analyze_multiple_windows,
+    find_patterns_progressive
 )
 import matplotlib.patheffects as pe
 from matplotlib.patches import Rectangle
@@ -732,7 +733,17 @@ def get_completed_patterns_for_date(date_str):
     print(f"Loaded {len(prices)} OHLC data points")
 
     # Get patterns using analyze_multiple_windows
-    all_patterns = analyze_multiple_windows(prices, dates, ohlc_data)
+    # all_patterns = analyze_multiple_windows(prices, dates, ohlc_data)
+    params = load_parameters()
+    use_progressive = params["pattern_detection"].get("use_progressive_search", True)
+
+    if use_progressive:
+        progressive_patterns = find_patterns_progressive(ohlc_data, dates)
+        all_patterns = [(p, "progressive search", {"method": "progressive"}) for p in progressive_patterns]
+        print(f"✅ Using progressive search: {len(progressive_patterns)} patterns found")
+    else:
+        all_patterns = analyze_multiple_windows(prices, dates, ohlc_data)
+        print(f"✅ Using window-based search: {len(all_patterns)} patterns found")
 
     # Filter for completed patterns
     completed_patterns = []
