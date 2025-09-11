@@ -1,14 +1,14 @@
 {
     "min_change": 0.001,
-    "window_sizes": [50, 150, 300,450,600, 800,1200],
+    "window_sizes": [100, 200, 300,450,600, 800,1800],
     "overlap": 50,
     "top_patterns": 50,
     "time_window": 120,
     "pattern_detection": {
         "retracement_target": 0.5,
-        "retracement_tolerance": 0.02,
+        "retracement_tolerance": 0.01,
         "completion_extension": 0.236,
-        "failure_level": 0.764,
+        "failure_level": 0.88,
         "min_move_multiplier": 1.0,
         "use_strict_swing_points": false,
         "only_show_significant": true,
