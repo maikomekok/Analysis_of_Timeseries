@@ -85,101 +85,30 @@ def calculate_80_percent_retracement(f_price, e_price, direction):
     return retracement_80
 
 
-def find_all_e_points_after_d(ohlc_data, dates, d_timestamp, d_price, direction):
-    """Find ALL potential E points after D using OHLC data"""
-    params = load_parameters()
-    min_change = params['min_change']
-    # If min_threshold_pct not in JSON, use min_change * 100
-    min_threshold_pct = params.get('min_threshold_pct', min_change * 100)
-
+def find_local_extremes_after_d(ohlc_data, dates, d_timestamp, direction, window_size=10):
+    """Find all local extremes after D point"""
     d_index = find_index_from_timestamp(dates, d_timestamp)
     highs = ohlc_data['high']
     lows = ohlc_data['low']
 
-    if d_index >= len(highs) - 1:
-        return []
+    extremes = []
 
-    e_points = []
-    min_distance_threshold = d_price * (min_threshold_pct / 100)
-
-    print(f"  Searching for E points after D:")
-    print(f"    D point: {d_timestamp}, ${d_price:.2f}")
-    print(f"    Min change threshold: {min_change * 100:.1f}%")
-
-    for i in range(d_index + 1, len(highs)):
-        current_timestamp = dates[i]
-
+    # Start searching from D+1
+    for i in range(d_index + window_size, len(dates) - window_size):
         if direction == 'up':
-            # Use HIGHS for uptrend E points
-            current_price = highs[i]
-            price_change = (current_price - d_price) / d_price if d_price != 0 else 0
-            distance_from_d = current_price - d_price
-
-            if price_change >= min_change and distance_from_d >= min_distance_threshold:
-                e_points.append((current_timestamp, current_price))
-
-        elif direction == 'down':
-            # Use LOWS for downtrend E points
-            current_price = lows[i]
-            price_change = (d_price - current_price) / d_price if d_price != 0 else 0
-            distance_from_d = d_price - current_price
-
-            if price_change >= min_change and distance_from_d >= min_distance_threshold:
-                e_points.append((current_timestamp, current_price))
-
-    print(f"  Found {len(e_points)} potential E points")
-    return e_points
-
-
-def check_80_percent_failure(ohlc_data, dates, e_timestamp, e_price, f_price, direction, start_from_timestamp=None):
-    """Check if price crosses retracement failure level using OHLC"""
-    params = load_parameters()
-    failure_percentage = params['pattern_detection']['failure_level']
-
-    if start_from_timestamp:
-        start_idx = find_index_from_timestamp(dates, start_from_timestamp)
-    else:
-        start_idx = find_index_from_timestamp(dates, e_timestamp)
-
-    highs = ohlc_data['high']
-    lows = ohlc_data['low']
-
-    if start_idx >= len(highs) - 1:
-        return {'failed_80_percent': False, 'reason': 'At end of data'}
-
-    retracement_80 = calculate_80_percent_retracement(f_price, e_price, direction)
-
-    for i in range(start_idx + 1, len(highs)):
-        current_timestamp = dates[i]
-
-        if direction == 'up':
-            # Check LOWS for failure in uptrend
-            if lows[i] <= retracement_80:
-                return {
-                    'failed_80_percent': True,
-                    'failure_point': (current_timestamp, lows[i]),
-                    'failure_level': retracement_80,
-                    'reason': f'UPTREND: Low went below {failure_percentage * 100:.0f}% level'
-                }
+            # Look for local highs in uptrend
+            if highs[i] == max(highs[i - window_size:i + window_size + 1]):
+                extremes.append((dates[i], highs[i], 'high'))
         else:
-            # Check HIGHS for failure in downtrend
-            if highs[i] >= retracement_80:
-                return {
-                    'failed_80_percent': True,
-                    'failure_point': (current_timestamp, highs[i]),
-                    'failure_level': retracement_80,
-                    'reason': f'DOWNTREND: High went above {failure_percentage * 100:.0f}% level'
-                }
+            # Look for local lows in downtrend
+            if lows[i] == min(lows[i - window_size:i + window_size + 1]):
+                extremes.append((dates[i], lows[i], 'low'))
 
-    return {
-        'failed_80_percent': False,
-        'failure_level': retracement_80,
-        'reason': f'No excessive retracement beyond {failure_percentage * 100:.0f}% level'
-    }
+    return extremes
 
 
-def check_50_percent_bounce_after_e_correct(ohlc_data, dates, e_timestamp, e_price, fib_levels, direction):
-    """Check for 50% retracement (S point) using OHLC data"""
+def check_s_bounce(ohlc_data, dates, e_timestamp, e_price, f_price, direction):
+    """Check for 50% retracement bounce (S point) after E"""
     params = load_parameters()
     retracement_target = params['pattern_detection']['retracement_target']
     retracement_tolerance = params['pattern_detection']['retracement_tolerance']
@@ -189,418 +118,240 @@ def check_50_percent_bounce_after_e_correct(ohlc_data, dates, e_timestamp, e_pri
     lows = ohlc_data['low']
 
     if e_idx >= len(highs) - 1:
-        return {'valid_50_bounce': False, 'reason': 'E point at end of data', 'failed_80_percent': False}
+        return None
 
-    f_price = fib_levels['38.2']
-
-    # Calculate S level (50% retracement)
+    # Calculate S level (50% retracement of FE move)
     if direction == 'up':
-        s_level = e_price - ((e_price - f_price) * retracement_target)
+        fe_move = e_price - f_price
+        s_level = e_price - (fe_move * retracement_target)
     else:
-        s_level = e_price + ((f_price - e_price) * retracement_target)
+        fe_move = f_price - e_price
+        s_level = e_price + (fe_move * retracement_target)
 
-    tolerance = s_level * retracement_tolerance
+    tolerance = abs(fe_move) * retracement_tolerance
 
-    # Look for S bounce using OHLC
-    bounce_found = False
-    bounce_point = None
-
-    for i in range(e_idx + 1, len(highs)):
+    # Search for S bounce
+    for i in range(e_idx + 1, len(dates)):
         if direction == 'up':
-            # Check if LOW touches S level for uptrend
+            # Check if low touches S level
             if abs(lows[i] - s_level) <= tolerance:
-                bounce_timestamp = dates[i]
-                bounce_point = (bounce_timestamp, lows[i])
-                bounce_found = True
-                print(f"    S bounce (LOW) at {bounce_timestamp}, ${lows[i]:.2f}")
-                break
-        else:
-            # Check if HIGH touches S level for downtrend
-            if abs(highs[i] - s_level) <= tolerance:
-                bounce_timestamp = dates[i]
-                bounce_point = (bounce_timestamp, highs[i])
-                bounce_found = True
-                print(f"    S bounce (HIGH) at {bounce_timestamp}, ${highs[i]:.2f}")
-                break
-
-    # Check for 80% failure
-    if bounce_found:
-        failure_check = check_80_percent_failure(ohlc_data, dates, bounce_point[0], e_price, f_price, direction)
-    else:
-        failure_check = check_80_percent_failure(ohlc_data, dates, e_timestamp, e_price, f_price, direction)
-
-    if failure_check['failed_80_percent']:
-        return {
-            'valid_50_bounce': bounce_found,
-            'reason': '80% retracement failure',
-            'failed_80_percent': True,
-            'failure_info': failure_check,
-            's_level': s_level,
-            'bounce_point': bounce_point if bounce_found else None
-        }
-
-    if bounce_found:
-        return {
-            'valid_50_bounce': True,
-            'reason': 'S bounce found',
-            'bounce_point': bounce_point,
-            's_level': s_level,
-            'f_price': f_price,
-            'e_price': e_price,
-            'fe_move': abs(e_price - f_price),
-            'direction': direction,
-            'failed_80_percent': False
-        }
-
-    return {
-        'valid_50_bounce': False,
-        'reason': 'No bounce at 50% retracement',
-        's_level': s_level,
-        'failed_80_percent': False
-    }
-
-
-def check_pattern_completion_236_extension(ohlc_data, dates, bounce_timestamp, e_price, f_price, direction):
-    """Check for pattern completion at -23.6% extension using OHLC"""
-    params = load_parameters()
-    completion_extension = params['pattern_detection']['completion_extension']
-
-    bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
-    highs = ohlc_data['high']
-    lows = ohlc_data['low']
-
-    if bounce_idx >= len(highs) - 1:
-        return {'pattern_completed': False, 'reason': 'S bounce at end of data', 'failed_80_percent': False}
-
-    # Calculate extension target
-    if direction == 'up':
-        fe_move_distance = e_price - f_price
-        extension_236 = e_price + (fe_move_distance * completion_extension)
-    else:
-        fe_move_distance = f_price - e_price
-        extension_236 = e_price - (fe_move_distance * completion_extension)
-
-    retracement_80 = calculate_80_percent_retracement(f_price, e_price, direction)
-
-    for i in range(bounce_idx + 1, len(highs)):
-        current_timestamp = dates[i]
-
-        # Check 80% failure first
-        if direction == 'up' and lows[i] <= retracement_80:
-            return {
-                'pattern_completed': False,
-                'target_price': extension_236,
-                'failed_80_percent': True,
-                'failure_point': (current_timestamp, lows[i]),
-                'failure_level': retracement_80
-            }
-        elif direction == 'down' and highs[i] >= retracement_80:
-            return {
-                'pattern_completed': False,
-                'target_price': extension_236,
-                'failed_80_percent': True,
-                'failure_point': (current_timestamp, highs[i]),
-                'failure_level': retracement_80
-            }
-
-        # Check for target completion
-        if direction == 'up' and highs[i] >= extension_236:
-            return {
-                'pattern_completed': True,
-                'completion_point': (current_timestamp, highs[i]),
-                'target_price': extension_236,
-                'actual_price': highs[i],
-                'failed_80_percent': False
-            }
-        elif direction == 'down' and lows[i] <= extension_236:
-            return {
-                'pattern_completed': True,
-                'completion_point': (current_timestamp, lows[i]),
-                'target_price': extension_236,
-                'actual_price': lows[i],
-                'failed_80_percent': False
-            }
-
-    return {
-        'pattern_completed': False,
-        'target_price': extension_236,
-        'reason': 'Target not reached yet',
-        'failed_80_percent': False
-    }
-
-
-def find_valid_e_with_trailing_strategy_complete(ohlc_data, dates, d_timestamp, d_price, fib_levels, direction):
-    """Enhanced trailing strategy with OHLC data"""
-    all_e_points = find_all_e_points_after_d(ohlc_data, dates, d_timestamp, d_price, direction)
-
-    if not all_e_points:
-        return {
-            'e_point': None,
-            'validation': {'valid_50_bounce': False, 'reason': 'No E points found'},
-            'is_valid': False,
-            'pattern_completed': False,
-            'failed_80_percent': False,
-            'trailing_attempts': []
-        }
-
-    highs = ohlc_data['high']
-    lows = ohlc_data['low']
-    trailing_attempts = []
-
-    for i, (initial_e_timestamp, initial_e_price) in enumerate(all_e_points):
-        f_price = fib_levels['38.2']
-
-        print(f"\n--- Trailing Attempt {i + 1}/{len(all_e_points)} ---")
-        print(f"Testing E: {initial_e_timestamp}, ${initial_e_price:.2f}")
-
-        validation = check_50_percent_bounce_after_e_correct(
-            ohlc_data, dates, initial_e_timestamp, initial_e_price, fib_levels, direction
-        )
-
-        if validation.get('failed_80_percent', False):
-            print(f"    ❌ Pattern failed: 80% retracement violation")
-            trailing_attempts.append({
-                'candidate_number': i + 1,
-                'e_point': (initial_e_timestamp, initial_e_price),
-                'validation': validation,
-                'found_bounce': validation['valid_50_bounce'],
-                'failed_80_percent': True
-            })
-            return {
-                'e_point': (initial_e_timestamp, initial_e_price),
-                'validation': validation,
-                'is_valid': False,
-                'pattern_completed': False,
-                'failed_80_percent': True,
-                'trailing_attempts': trailing_attempts
-            }
-
-        if validation['valid_50_bounce']:
-            print(f"    ✅ S bounce found! Finding {direction.upper()} extreme before bounce...")
-
-            bounce_timestamp = validation['bounce_point'][0]
-            bounce_idx = find_index_from_timestamp(dates, bounce_timestamp)
-            d_idx = find_index_from_timestamp(dates, d_timestamp)
-
-            # Find extreme BEFORE bounce using OHLC
-            if direction == 'up':
-                # Find highest HIGH before bounce
-                search_highs = highs[d_idx:bounce_idx]
-                if search_highs:
-                    max_price = max(search_highs)
-                    max_idx = d_idx + search_highs.index(max_price)
-                    final_e_timestamp = dates[max_idx]
-                    final_e_price = max_price
-                else:
-                    final_e_timestamp = initial_e_timestamp
-                    final_e_price = initial_e_price
-            else:
-                # Find lowest LOW before bounce
-                search_lows = lows[d_idx:bounce_idx]
-                if search_lows:
-                    min_price = min(search_lows)
-                    min_idx = d_idx + search_lows.index(min_price)
-                    final_e_timestamp = dates[min_idx]
-                    final_e_price = min_price
-                else:
-                    final_e_timestamp = initial_e_timestamp
-                    final_e_price = initial_e_price
-
-            # Re-validate with final E
-            final_validation = check_50_percent_bounce_after_e_correct(
-                ohlc_data, dates, final_e_timestamp, final_e_price, fib_levels, direction
-            )
-
-            if not final_validation['valid_50_bounce']:
-                print(f"    ❌ No valid S bounce after final E")
-                trailing_attempts.append({
-                    'candidate_number': i + 1,
-                    'e_point': (final_e_timestamp, final_e_price),
-                    'validation': final_validation,
-                    'found_bounce': False
-                })
-                continue
-
-            # Check completion
-            final_bounce_timestamp = final_validation['bounce_point'][0]
-            completion_result = check_pattern_completion_236_extension(
-                ohlc_data, dates, final_bounce_timestamp, final_e_price, f_price, direction
-            )
-
-            if completion_result.get('failed_80_percent', False):
-                print(f"    ❌ Pattern failed during target approach")
-                trailing_attempts.append({
-                    'candidate_number': i + 1,
-                    'e_point': (final_e_timestamp, final_e_price),
-                    'validation': final_validation,
-                    'completion': completion_result,
-                    'failed_80_percent': True
-                })
                 return {
-                    'e_point': (final_e_timestamp, final_e_price),
-                    'validation': final_validation,
-                    'completion': completion_result,
-                    'is_valid': False,
-                    'pattern_completed': False,
-                    'failed_80_percent': True,
-                    'trailing_attempts': trailing_attempts
+                    'timestamp': dates[i],
+                    'price': lows[i],
+                    's_level': s_level,
+                    'index': i
+                }
+        else:
+            # Check if high touches S level
+            if abs(highs[i] - s_level) <= tolerance:
+                return {
+                    'timestamp': dates[i],
+                    'price': highs[i],
+                    's_level': s_level,
+                    'index': i
                 }
 
-            print(f"    ✅ Valid pattern found!")
-            trailing_attempts.append({
-                'candidate_number': i + 1,
-                'e_point': (final_e_timestamp, final_e_price),
-                'validation': final_validation,
-                'completion': completion_result,
-                'found_bounce': True,
-                'pattern_completed': completion_result['pattern_completed']
-            })
+    return None
 
-            return {
-                'e_point': (final_e_timestamp, final_e_price),
-                'validation': final_validation,
-                'completion': completion_result,
-                'is_valid': True,
-                'pattern_completed': completion_result['pattern_completed'],
-                'failed_80_percent': False,
-                's_level': final_validation['s_level'],
-                'trailing_attempts': trailing_attempts,
-                'successful_attempt': i + 1
-            }
+
+def check_pattern_completion(ohlc_data, dates, s_bounce_idx, e_price, f_price, direction):
+    """Check if pattern completes at -23.6% extension after S bounce"""
+    params = load_parameters()
+    completion_extension = params['pattern_detection']['completion_extension']
+    failure_level = params['pattern_detection']['failure_level']
+
+    highs = ohlc_data['high']
+    lows = ohlc_data['low']
+
+    # Calculate target and failure levels
+    if direction == 'up':
+        fe_move = e_price - f_price
+        target_level = e_price + (fe_move * completion_extension)
+        failure_level_price = e_price - (fe_move * failure_level)
+    else:
+        fe_move = f_price - e_price
+        target_level = e_price - (fe_move * completion_extension)
+        failure_level_price = e_price + (fe_move * failure_level)
+
+    # Search for completion or failure
+    for i in range(s_bounce_idx + 1, len(dates)):
+        # Check failure first
+        if direction == 'up':
+            if lows[i] <= failure_level_price:
+                return {
+                    'status': 'failed',
+                    'timestamp': dates[i],
+                    'price': lows[i],
+                    'target_level': target_level,
+                    'failure_level': failure_level_price,
+                    's_failure_point': (dates[i], failure_level_price)  # S point at failure level
+                }
+            if highs[i] >= target_level:
+                return {
+                    'status': 'completed',
+                    'timestamp': dates[i],
+                    'price': highs[i],
+                    'target_level': target_level,
+                    'failure_level': failure_level_price
+                }
         else:
-            print(f"    ❌ No S bounce found")
-            trailing_attempts.append({
-                'candidate_number': i + 1,
-                'e_point': (initial_e_timestamp, initial_e_price),
-                'validation': validation,
-                'found_bounce': False
-            })
+            if highs[i] >= failure_level_price:
+                return {
+                    'status': 'failed',
+                    'timestamp': dates[i],
+                    'price': highs[i],
+                    'target_level': target_level,
+                    'failure_level': failure_level_price,
+                    's_failure_point': (dates[i], failure_level_price)  # S point at failure level
+                }
+            if lows[i] <= target_level:
+                return {
+                    'status': 'completed',
+                    'timestamp': dates[i],
+                    'price': lows[i],
+                    'target_level': target_level,
+                    'failure_level': failure_level_price
+                }
 
     return {
-        'e_point': all_e_points[-1] if all_e_points else None,
-        'validation': {'valid_50_bounce': False, 'reason': 'No valid S bounce found'},
-        'is_valid': False,
-        'pattern_completed': False,
-        'failed_80_percent': False,
-        'trailing_attempts': trailing_attempts
+        'status': 'pending',
+        'target_level': target_level,
+        'failure_level': failure_level_price
     }
 
 
-def analyze_fan_extension_with_completion(pattern, ohlc_data, dates):
-    """Main fan extension analysis with OHLC data"""
-    params = load_parameters()
-
+def find_fan_extension_pattern(pattern, ohlc_data, dates):
+    """Main function to find fan extension pattern with trailing E points"""
     fib_levels = calculate_fibonacci_levels(pattern)
     d_timestamp = pattern['D'][0]
     d_price = pattern['D'][1]
     direction = pattern.get('direction', 'unknown')
+    f_price = fib_levels['38.2']
 
     print(f"\n{'=' * 70}")
-    print(f"ANALYZING {direction.upper()} PATTERN WITH OHLC DATA")
-    print(f"  D point: {d_timestamp}, ${d_price:.2f}")
-    print(f"  F point (38.2%): ${fib_levels['38.2']:.2f}")
+    print(f"SEARCHING FOR FAN EXTENSION - {direction.upper()} PATTERN")
+    print(f"  D: {d_timestamp}, ${d_price:.2f}")
+    print(f"  F (38.2%): ${f_price:.2f}")
 
-    # Use OHLC-aware trailing strategy
-    e_result = find_valid_e_with_trailing_strategy_complete(
-        ohlc_data, dates, d_timestamp, d_price, fib_levels, direction
-    )
+    # Get D index
+    d_index = find_index_from_timestamp(dates, d_timestamp)
+    highs = ohlc_data['high']
+    lows = ohlc_data['low']
 
-    # Build analysis results
-    analysis = {
-        'pattern': pattern,
-        'fibonacci_levels': fib_levels,
-        'f_level': fib_levels['38.2'],
-        'd_timestamp': d_timestamp,
-        'd_price': d_price,
-        'pattern_direction': direction,
-        'is_valid': False,
-        'pattern_completed': False,
-        'failed_80_percent': False,
-        'strategy': 'trailing_ohlc'
-    }
+    # Find all local extremes after D
+    extremes = find_local_extremes_after_d(ohlc_data, dates, d_timestamp, direction)
 
-    if e_result and e_result.get('failed_80_percent', False):
-        analysis['failed_80_percent'] = True
-        analysis['is_valid'] = False
-        analysis['pattern_completed'] = False
-        if e_result.get('e_point'):
-            analysis['e_point'] = e_result['e_point']
+    if not extremes:
+        print("  No local extremes found after D")
+        return None
+
+    print(f"  Found {len(extremes)} potential E points")
+
+    # Try each extreme as E point
+    for idx, (e_candidate_timestamp, e_candidate_price, e_type) in enumerate(extremes):
+        print(f"\n  Testing E candidate #{idx + 1}: {e_candidate_timestamp}, ${e_candidate_price:.2f}")
+
+        # Check for S bounce using this candidate
+        s_bounce = check_s_bounce(ohlc_data, dates, e_candidate_timestamp, e_candidate_price, f_price, direction)
+
+        if s_bounce:
+            print(f"    ✓ S bounce found at {s_bounce['timestamp']}, ${s_bounce['price']:.2f}")
+
+            # NOW find the actual extreme between D and S
+            s_index = s_bounce['index']
+
             if direction == 'up':
-                analysis['highest_after_d'] = e_result['e_point']
+                # Find the highest high between D and S
+                search_highs = highs[d_index:s_index + 1]
+                actual_e_price = max(search_highs)
+                actual_e_idx = d_index + search_highs.index(actual_e_price)
             else:
-                analysis['lowest_after_d'] = e_result['e_point']
-        analysis['validation_info'] = e_result.get('validation', {})
-        analysis['trailing_attempts'] = e_result.get('trailing_attempts', [])
+                # Find the lowest low between D and S
+                search_lows = lows[d_index:s_index + 1]
+                actual_e_price = min(search_lows)
+                actual_e_idx = d_index + search_lows.index(actual_e_price)
 
-    elif e_result and e_result['is_valid']:
-        e_point = e_result['e_point']
-        analysis['e_point'] = e_point
-        if direction == 'up':
-            analysis['highest_after_d'] = e_point
+            actual_e_timestamp = dates[actual_e_idx]
+
+            print(f"    📍 Actual E point (absolute extreme): {actual_e_timestamp}, ${actual_e_price:.2f}")
+
+            # Re-calculate S level based on actual E
+            if direction == 'up':
+                fe_move = actual_e_price - f_price
+                actual_s_level = actual_e_price - (fe_move * 0.5)
+            else:
+                fe_move = f_price - actual_e_price
+                actual_s_level = actual_e_price + (fe_move * 0.5)
+
+            # Update S bounce info with recalculated level
+            s_bounce['s_level'] = actual_s_level
+
+            # Check for pattern completion using actual E
+            completion = check_pattern_completion(
+                ohlc_data, dates, s_bounce['index'],
+                actual_e_price, f_price, direction
+            )
+
+            if completion['status'] == 'completed':
+                print(f"    ✓ Pattern COMPLETED at {completion['timestamp']}, ${completion['price']:.2f}")
+            elif completion['status'] == 'failed':
+                print(f"    ✗ Pattern FAILED at {completion['timestamp']}, ${completion['price']:.2f}")
+            else:
+                print(f"    ~ Pattern pending (target: ${completion['target_level']:.2f})")
+
+            # Return the successful pattern with actual E
+            return {
+                'pattern': pattern,
+                'fibonacci_levels': fib_levels,
+                'f_level': f_price,
+                'e_point': (actual_e_timestamp, actual_e_price),
+                'e_candidate': (e_candidate_timestamp, e_candidate_price),  # Keep track of original candidate
+                's_bounce': s_bounce,
+                'completion': completion,
+                'direction': direction,
+                'is_valid': True,
+                'attempts': idx + 1
+            }
         else:
-            analysis['lowest_after_d'] = e_point
+            print(f"    ✗ No S bounce found")
 
-        analysis['validation_info'] = e_result['validation']
-        analysis['completion_info'] = e_result.get('completion', {})
-        analysis['is_valid'] = True
-        analysis['pattern_completed'] = e_result.get('pattern_completed', False)
-        analysis['s_level'] = e_result.get('s_level')
-        analysis['trailing_attempts'] = e_result.get('trailing_attempts', [])
-
-        # Calculate completion target
-        e_price = e_point[1]
-        f_price = fib_levels['38.2']
-        if direction == 'up':
-            fe_move = e_price - f_price
-            analysis['completion_target'] = e_price + (fe_move * params['pattern_detection']['completion_extension'])
-        else:
-            fe_move = f_price - e_price
-            analysis['completion_target'] = e_price - (fe_move * params['pattern_detection']['completion_extension'])
-
-        analysis['fe_move'] = fe_move
-        analysis['retracement_80_level'] = calculate_80_percent_retracement(f_price, e_price, direction)
-
-    else:
-        analysis['validation_info'] = e_result.get('validation', {})
-        analysis['is_valid'] = False
-        analysis['pattern_completed'] = False
-        analysis['trailing_attempts'] = e_result.get('trailing_attempts', [])
-
-    return analysis
+    print("\n  No valid fan extension found")
+    return None
 
 
-def plot_pattern_with_ohlc(analysis, ohlc_data, dates):
-    """Plot pattern with OHLC candlesticks"""
-    params = load_parameters()
-    output_settings = params.get('output_settings', {})
-
+def plot_fan_extension_pattern(analysis, ohlc_data, dates):
+    """Enhanced plotting with all pattern points labeled consistently"""
     pattern = analysis['pattern']
-    direction = pattern.get('direction', 'unknown')
+    direction = analysis['direction']
 
-    fig, ax = plt.subplots(figsize=(22, 12))
+    fig, ax = plt.subplots(figsize=(24, 14))
 
-    # Get display range
+    # Determine display range
     pattern_indices = []
     for point in ['A', 'B', 'C', 'D']:
-        timestamp, price = pattern[point]
+        timestamp = pattern[point][0]
         idx = find_index_from_timestamp(dates, timestamp)
         pattern_indices.append(idx)
+
+    # Include E point
+    if analysis.get('e_point'):
+        e_idx = find_index_from_timestamp(dates, analysis['e_point'][0])
+        pattern_indices.append(e_idx)
+
+    # Include completion point if exists
+    if analysis.get('completion') and analysis['completion'].get('timestamp'):
+        comp_idx = find_index_from_timestamp(dates, analysis['completion']['timestamp'])
+        pattern_indices.append(comp_idx)
 
     min_idx = min(pattern_indices)
     max_idx = max(pattern_indices)
 
-    # Include E point if exists
-    if analysis.get('e_point'):
-        e_timestamp = analysis['e_point'][0]
-        e_idx = find_index_from_timestamp(dates, e_timestamp)
-        max_idx = max(max_idx, e_idx)
-
     # Add padding
-    padding = 100
+    padding = 50
     start_idx = max(0, min_idx - padding)
     end_idx = min(len(dates) - 1, max_idx + padding)
 
-    # Plot OHLC candlesticks
+    # Plot candlesticks
     for i in range(start_idx, end_idx):
         date = dates[i]
         open_price = ohlc_data['open'][i]
@@ -608,67 +359,167 @@ def plot_pattern_with_ohlc(analysis, ohlc_data, dates):
         low_price = ohlc_data['low'][i]
         close_price = ohlc_data['close'][i]
 
-        # Determine color
-        color = '#00AA00' if close_price >= open_price else '#AA0000'
+        color = '#00CC00' if close_price >= open_price else '#CC0000'
 
-        # Draw high-low line
+        # High-low line
         ax.plot([date, date], [low_price, high_price],
-                color='black', linewidth=0.5, alpha=0.7, zorder=1)
+                color='black', linewidth=0.5, alpha=0.6, zorder=1)
 
-        # Draw body
+        # Body rectangle
         body_height = abs(close_price - open_price)
         body_bottom = min(open_price, close_price)
 
         if i < len(dates) - 1:
-            width = (mdates.date2num(dates[i + 1]) - mdates.date2num(date)) * 0.6
+            width = (mdates.date2num(dates[i + 1]) - mdates.date2num(date)) * 0.7
         else:
-            width = 0.0004
+            width = 0.0005
 
         rect = Rectangle((mdates.date2num(date) - width / 2, body_bottom),
                          width, body_height,
                          facecolor=color, edgecolor='black',
-                         alpha=0.8, linewidth=0.3, zorder=2)
+                         alpha=0.7, linewidth=0.3, zorder=2)
         ax.add_patch(rect)
 
-    # Plot pattern points
-    points = ['A', 'B', 'C', 'D']
-    point_colors = {'A': '#2F2F2F', 'B': '#D62728', 'C': '#FF7F0E', 'D': '#1f77b4'}
+    # Plot ABCD pattern points with consistent style
+    point_style = {
+        'A': {'color': '#2F2F2F', 'marker': 'o', 'size': 14},
+        'B': {'color': '#D62728', 'marker': 'o', 'size': 14},
+        'C': {'color': '#FF7F0E', 'marker': 'o', 'size': 14},
+        'D': {'color': '#1F77B4', 'marker': 'o', 'size': 14}
+    }
 
-    for point in points:
-        timestamp, price = pattern[point]
-        ax.plot(timestamp, price, 'o', color=point_colors[point],
-                markersize=12, zorder=10,
-                markeredgecolor='white', markeredgewidth=2)
-        ax.text(timestamp, price, point, ha='center', va='center',
-                fontsize=11, fontweight='bold', color='white', zorder=15)
+    # Plot and label ABCD points
+    for point_name in ['A', 'B', 'C', 'D']:
+        timestamp, price = pattern[point_name]
+        style = point_style[point_name]
 
-    # F level
-    if analysis.get('f_level'):
-        f_price = analysis['f_level']
-        ax.axhline(y=f_price, color='#2CA02C', linestyle='--',
-                   linewidth=3, alpha=0.8, zorder=3)
-        ax.plot(pattern['D'][0], f_price, 's', color='#2CA02C',
-                markersize=16, zorder=15,
-                markeredgecolor='white', markeredgewidth=3)
-        ax.text(pattern['D'][0], f_price, 'F', ha='center', va='bottom',
-                fontsize=12, fontweight='bold', color='#2CA02C', zorder=16)
+        # Plot point with white border
+        ax.plot(timestamp, price, style['marker'],
+                color=style['color'], markersize=style['size'],
+                markeredgecolor='white', markeredgewidth=2.5, zorder=10)
 
-    # E point
+        # Add label
+        ax.text(timestamp, price, point_name,
+                ha='center', va='center',
+                fontsize=11, fontweight='bold', color='white', zorder=11)
+
+    # Plot F point (38.2% retracement)
+    f_price = analysis['f_level']
+    f_timestamp = pattern['D'][0]  # F is at same time as D
+
+    ax.plot(f_timestamp, f_price, 's',
+            color='#2CA02C', markersize=14,
+            markeredgecolor='white', markeredgewidth=2.5, zorder=10)
+    ax.text(f_timestamp, f_price, 'F',
+            ha='center', va='center',
+            fontsize=11, fontweight='bold', color='white', zorder=11)
+
+    # Draw horizontal line from F
+    ax.axhline(y=f_price, color='#2CA02C', linestyle='--',
+               linewidth=2, alpha=0.6, label='F Level (38.2%)')
+
+    # Plot E point
     if analysis.get('e_point'):
         e_timestamp, e_price = analysis['e_point']
-        ax.plot(e_timestamp, e_price, 'D', color='#228B22',
-                markersize=18, zorder=15,
-                markeredgecolor='white', markeredgewidth=3)
-        ax.text(e_timestamp, e_price, 'E', ha='center', va='top',
-                fontsize=12, fontweight='bold', color='#228B22', zorder=16)
 
-    # S level
-    if analysis.get('s_level'):
-        s_level = analysis['s_level']
-        ax.axhline(y=s_level, color='#9467BD', linewidth=4,
-                   alpha=0.9, zorder=3)
+        ax.plot(e_timestamp, e_price, 'D',
+                color='#9467BD', markersize=14,
+                markeredgecolor='white', markeredgewidth=2.5, zorder=10)
+        ax.text(e_timestamp, e_price, 'E',
+                ha='center', va='center',
+                fontsize=11, fontweight='bold', color='white', zorder=11)
 
-    # Format
+        # Draw line from F to E
+        ax.plot([f_timestamp, e_timestamp], [f_price, e_price],
+                'b-', linewidth=2, alpha=0.7, label='F-E Extension')
+
+    # Plot S bounce point or S failure point
+    if analysis.get('s_bounce'):
+        s_bounce = analysis['s_bounce']
+        s_timestamp = s_bounce['timestamp']
+        s_price = s_bounce['price']
+        s_level = s_bounce['s_level']
+
+        # Check if pattern failed and we have an S failure point
+        if analysis.get('completion') and analysis['completion'].get('s_failure_point'):
+            # Plot S at the failure level (80% retracement)
+            s_fail_timestamp, s_fail_price = analysis['completion']['s_failure_point']
+
+            # Plot S at failure level
+            ax.plot(s_fail_timestamp, s_fail_price, '^',
+                    color='#FF4444', markersize=14,
+                    markeredgecolor='white', markeredgewidth=2.5, zorder=10)
+            ax.text(s_fail_timestamp, s_fail_price, 'S',
+                    ha='center', va='center',
+                    fontsize=11, fontweight='bold', color='white', zorder=11)
+
+            # Still show the original S bounce attempt
+            ax.plot(s_timestamp, s_price, '^',
+                    color='#17BECF', markersize=10, alpha=0.5,
+                    markeredgecolor='white', markeredgewidth=1.5, zorder=9)
+
+            # Draw both S levels
+            ax.axhline(y=s_level, color='#17BECF', linestyle=':',
+                       linewidth=1.5, alpha=0.4, label='S Level attempted (50% FE)')
+            ax.axhline(y=analysis['completion']['failure_level'], color='#FF4444', linestyle=':',
+                       linewidth=2, alpha=0.8, label='S Level failed (80% FE)')
+        else:
+            # Normal S bounce (pattern didn't fail at 80%)
+            ax.plot(s_timestamp, s_price, '^',
+                    color='#17BECF', markersize=14,
+                    markeredgecolor='white', markeredgewidth=2.5, zorder=10)
+            ax.text(s_timestamp, s_price, 'S',
+                    ha='center', va='center',
+                    fontsize=11, fontweight='bold', color='white', zorder=11)
+
+            # Draw S level line
+            ax.axhline(y=s_level, color='#17BECF', linestyle=':',
+                       linewidth=2, alpha=0.6, label='S Level (50% FE)')
+
+    # Plot completion/failure point
+    if analysis.get('completion'):
+        completion = analysis['completion']
+        if completion.get('timestamp'):
+            comp_timestamp = completion['timestamp']
+            comp_price = completion['price']
+            comp_status = completion['status']
+
+            if comp_status == 'completed':
+                marker_color = '#00FF00'
+                label_text = 'T'  # Target reached
+            else:
+                marker_color = '#FF0000'
+                label_text = 'X'  # Failed
+
+            ax.plot(comp_timestamp, comp_price, 'v',
+                    color=marker_color, markersize=14,
+                    markeredgecolor='white', markeredgewidth=2.5, zorder=10)
+            ax.text(comp_timestamp, comp_price, label_text,
+                    ha='center', va='center',
+                    fontsize=11, fontweight='bold', color='white', zorder=11)
+
+        # Draw target level
+        if 'target_level' in completion:
+            ax.axhline(y=completion['target_level'], color='green',
+                       linestyle='--', linewidth=2, alpha=0.6,
+                       label='Target (-23.6% ext)')
+
+        # Draw failure level
+        if 'failure_level' in completion:
+            ax.axhline(y=completion['failure_level'], color='red',
+                       linestyle='--', linewidth=2, alpha=0.6,
+                       label='Failure (80% retr)')
+
+    # Connect pattern lines
+    # ABCD lines
+    for i in range(len(['A', 'B', 'C', 'D']) - 1):
+        point1 = ['A', 'B', 'C', 'D'][i]
+        point2 = ['A', 'B', 'C', 'D'][i + 1]
+        t1, p1 = pattern[point1]
+        t2, p2 = pattern[point2]
+        ax.plot([t1, t2], [p1, p2], 'gray', linewidth=1.5, alpha=0.5)
+
+    # Format axes
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     fig.autofmt_xdate()
@@ -676,40 +527,48 @@ def plot_pattern_with_ohlc(analysis, ohlc_data, dates):
     ax.set_xlabel('Time', fontsize=12)
     ax.set_ylabel('Price ($)', fontsize=12)
 
-    # Title
-    if analysis.get('is_valid'):
-        if analysis.get('pattern_completed'):
-            title = f'COMPLETED {direction.upper()} Pattern (OHLC)'
+    # Title based on status
+    if analysis.get('completion'):
+        status = analysis['completion']['status']
+        if status == 'completed':
+            title = f'✓ COMPLETED Fan Extension - {direction.upper()} Pattern'
+            ax.set_title(title, fontsize=14, fontweight='bold', color='green')
+        elif status == 'failed':
+            title = f'✗ FAILED Fan Extension - {direction.upper()} Pattern'
+            ax.set_title(title, fontsize=14, fontweight='bold', color='red')
         else:
-            title = f'VALID {direction.upper()} Pattern (OHLC)'
+            title = f'~ PENDING Fan Extension - {direction.upper()} Pattern'
+            ax.set_title(title, fontsize=14, fontweight='bold', color='orange')
     else:
-        title = f'INVALID {direction.upper()} Pattern (OHLC)'
+        title = f'Fan Extension Analysis - {direction.upper()} Pattern'
+        ax.set_title(title, fontsize=14, fontweight='bold')
 
-    ax.set_title(title, fontsize=14, fontweight='bold')
+    # Add legend
+    ax.legend(loc='best', fontsize=10)
 
-    plt.grid(True, alpha=0.3)
+    # Grid
+    ax.grid(True, alpha=0.3, linestyle=':')
+
     plt.tight_layout()
-
-    if output_settings.get('save_plots', False):
-        filename = f'pattern_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-        plt.savefig(filename, dpi=output_settings.get('plot_dpi', 300))
-
     plt.show()
 
+    return fig
 
-def get_completed_patterns_for_date(date_str):
-    """Load OHLC data for a specific date and analyze patterns"""
+
+def analyze_patterns_for_date(date_str):
+    """Main function to analyze patterns for a given date"""
     params = load_parameters()
 
     print(f"\n{'=' * 70}")
-    print(f"FAN EXTENSION ANALYSIS WITH OHLC DATA")
+    print(f"FAN EXTENSION PATTERN ANALYSIS")
     print(f"Date: {date_str}")
+    print(f"{'=' * 70}")
 
     # Find data file
     possible_files = [
-        f"C:/Users/admin/Desktop/btc_1minute_data/btc_1minute_data_1minute_{date_str}.csv",
-        f"btc_minute_data_{date_str}.csv",
-        f"./btc_minute_data_{date_str}.csv"
+        f"btc_1minute_data_{date_str}.csv",
+        f"./btc_1minute_data_{date_str}.csv",
+        f"C:/Users/admin/Desktop/btc_1minute_data/btc_1minute_data_1minute_{date_str}.csv"
     ]
 
     data_file = None
@@ -720,131 +579,104 @@ def get_completed_patterns_for_date(date_str):
             break
 
     if not data_file:
-        print(f"Data file not found")
-        return {"status": "file_not_found", "date": date_str}
+        print(f"ERROR: Data file not found for {date_str}")
+        return None
 
     # Load OHLC data
     prices, dates, df, ohlc_data = load_and_prepare_data(data_file)
 
     if ohlc_data is None:
-        print("ERROR: No OHLC data found in file")
-        return {"status": "no_ohlc_data", "date": date_str}
+        print("ERROR: No OHLC data found")
+        return None
 
-    print(f"Loaded {len(prices)} OHLC data points")
+    print(f"Loaded {len(prices)} data points")
 
-    # Get patterns using analyze_multiple_windows
-    # all_patterns = analyze_multiple_windows(prices, dates, ohlc_data)
-    params = load_parameters()
+    # Find base ABCD patterns
     use_progressive = params["pattern_detection"].get("use_progressive_search", True)
 
     if use_progressive:
-        progressive_patterns = find_patterns_progressive(ohlc_data, dates)
-        all_patterns = [(p, "progressive search", {"method": "progressive"}) for p in progressive_patterns]
-        print(f"✅ Using progressive search: {len(progressive_patterns)} patterns found")
+        patterns = find_patterns_progressive(ohlc_data, dates)
+        print(f"Found {len(patterns)} patterns using progressive search")
     else:
         all_patterns = analyze_multiple_windows(prices, dates, ohlc_data)
-        print(f"✅ Using window-based search: {len(all_patterns)} patterns found")
+        patterns = [p[0] for p in all_patterns]
+        print(f"Found {len(patterns)} patterns using window search")
 
     # Filter for completed patterns
-    completed_patterns = []
-    for pattern_data in all_patterns:
-        pattern, analysis, window_info = pattern_data
-        if isinstance(pattern, list):
-            for p in pattern:
-                if p.get('status') == 'completed':
-                    completed_patterns.append(p)
-        else:
-            if pattern.get('status') == 'completed':
-                completed_patterns.append(pattern)
+    completed_patterns = [p for p in patterns if p.get('status') == 'completed']
+    print(f"Completed ABCD patterns: {len(completed_patterns)}")
 
-    print(f"Total patterns found: {len(all_patterns)}")
-    print(f"Completed patterns: {len(completed_patterns)}")
-
-    # Analyze fan extensions with OHLC
-    extension_analyses = []
-    successful_patterns = 0
-    failed_patterns = 0
+    # Analyze fan extensions
+    fan_extensions = []
+    successful_count = 0
+    failed_count = 0
+    pending_count = 0
 
     for i, pattern in enumerate(completed_patterns):
         print(f"\n{'=' * 50}")
         print(f"PATTERN {i + 1}/{len(completed_patterns)}")
-        print(f"Direction: {pattern.get('direction', 'unknown')}")
 
-        # Analyze with OHLC data
-        extension_analysis = analyze_fan_extension_with_completion(pattern, ohlc_data, dates)
-        extension_analyses.append(extension_analysis)
+        result = find_fan_extension_pattern(pattern, ohlc_data, dates)
 
-        if extension_analysis['is_valid']:
-            successful_patterns += 1
-            print(f"✅ Pattern {i + 1}: VALID")
-            if extension_analysis.get('pattern_completed'):
-                print(f"    Status: COMPLETED")
+        if result:
+            fan_extensions.append(result)
+
+            if result['completion']['status'] == 'completed':
+                successful_count += 1
+                print(f"✓ Fan extension COMPLETED")
+            elif result['completion']['status'] == 'failed':
+                failed_count += 1
+                print(f"✗ Fan extension FAILED")
             else:
-                print(f"    Status: VALID (awaiting completion)")
+                pending_count += 1
+                print(f"~ Fan extension PENDING")
         else:
-            failed_patterns += 1
-            if extension_analysis.get('failed_80_percent'):
-                print(f"❌ Pattern {i + 1}: FAILED (80% retracement)")
-            else:
-                print(f"❌ Pattern {i + 1}: INVALID (no S bounce)")
+            print(f"No valid fan extension found")
 
-        # Show E point info
-        if extension_analysis.get('e_point'):
-            e_timestamp, e_price = extension_analysis['e_point']
-            print(f"    E point: {e_timestamp} at ${e_price:.2f}")
-
-        # Show trailing attempts
-        attempts = extension_analysis.get('trailing_attempts', [])
-        if attempts:
-            print(f"    Tested {len(attempts)} E candidates")
-
-    # Summary statistics
+    # Summary
     print(f"\n{'=' * 70}")
-    print(f"FINAL RESULTS")
+    print(f"SUMMARY RESULTS")
     print(f"{'=' * 70}")
-    print(f"Total completed ABCD patterns: {len(completed_patterns)}")
-    print(f"Valid fan extensions: {successful_patterns}")
-    print(f"Failed/Invalid extensions: {failed_patterns}")
+    print(f"Total ABCD patterns: {len(patterns)}")
+    print(f"Completed ABCD: {len(completed_patterns)}")
+    print(f"Valid fan extensions: {len(fan_extensions)}")
+    print(f"  - Completed: {successful_count}")
+    print(f"  - Failed: {failed_count}")
+    print(f"  - Pending: {pending_count}")
 
-    if len(completed_patterns) > 0:
-        success_rate = (successful_patterns / len(completed_patterns)) * 100
+    if len(fan_extensions) > 0:
+        success_rate = (successful_count / len(fan_extensions)) * 100
         print(f"Success rate: {success_rate:.1f}%")
 
+    # Plot results
+    if params.get('output_settings', {}).get('show_plots', True):
+        for extension in fan_extensions:
+            plot_fan_extension_pattern(extension, ohlc_data, dates)
+
     return {
-        "status": "success",
-        "date": date_str,
-        "completed_patterns": completed_patterns,
-        "extension_analyses": extension_analyses,
-        "ohlc_data": ohlc_data,
-        "dates": dates,
-        "total_patterns": len(all_patterns),
-        "completed_count": len(completed_patterns),
-        "valid_extensions": successful_patterns,
-        "failed_extensions": failed_patterns
+        'date': date_str,
+        'patterns': patterns,
+        'completed_patterns': completed_patterns,
+        'fan_extensions': fan_extensions,
+        'stats': {
+            'total_patterns': len(patterns),
+            'completed_abcd': len(completed_patterns),
+            'valid_extensions': len(fan_extensions),
+            'successful': successful_count,
+            'failed': failed_count,
+            'pending': pending_count
+        }
     }
 
 
 if __name__ == "__main__":
-    params = load_parameters()
+    # Analyze for a specific date
     date_to_analyze = "2025-09-01"
-    show_plots = params.get('output_settings', {}).get('show_plots', True)
 
-    print(f"🚀 Starting OHLC fan extension analysis for {date_to_analyze}")
-    print(f"Using parameters from parameters.json")
+    results = analyze_patterns_for_date(date_to_analyze)
 
-    results = get_completed_patterns_for_date(date_to_analyze)
-
-    if results["status"] == "success":
-        print(f"\n✅ ANALYSIS COMPLETED!")
-        print(f"Found {results['completed_count']} completed ABCD patterns")
-        print(f"Valid fan extensions: {results['valid_extensions']}")
-        print(f"Failed extensions: {results['failed_extensions']}")
-
-        if show_plots and results['extension_analyses']:
-            print("\n📈 Generating OHLC plots...")
-            for i, analysis in enumerate(results['extension_analyses']):
-                if analysis.get('e_point'):
-                    print(f"\nPlotting pattern {i + 1}...")
-                    plot_pattern_with_ohlc(analysis, results['ohlc_data'], results['dates'])
+    if results:
+        print(f"\n✓ Analysis complete!")
+        print(f"Found {results['stats']['valid_extensions']} valid fan extension patterns")
     else:
-        print(f"❌ Error: {results['status']}")
+        print(f"\n✗ Analysis failed")

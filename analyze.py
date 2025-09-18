@@ -38,7 +38,7 @@ def find_index_from_timestamp(dates, target_timestamp):
                 return pos
 
 
-def find_local_extremes(ohlc_data, window_size=5):
+def find_local_extremes(ohlc_data, window_size=50):
     """Find all local highs and lows in OHLC data, ensuring A is highest high or lowest low"""
     highs = ohlc_data['high']
     lows = ohlc_data['low']
