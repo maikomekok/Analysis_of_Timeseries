@@ -14,7 +14,7 @@ print(f"Processing completed. Generated {len(results)} files.")
 for date, filepath in results.items():
     print(f"Date {date}: {filepath}")
 
-# Uncomment below to process 1-second data instead:
+# script to process 1-second data instead:
 # results_1sec = process_bitcoin_data(
 #     input_dir='C:\\Users\\admin\\Desktop\\btc_data',
 #     output_dir='C:\\Users\\admin\\Desktop\\btc_1second_data',  # Different output for 1-second data
@@ -31,7 +31,6 @@ OUTPUT_DIRECTORY_1MIN = 'C:\\Users\\admin\\Desktop\\btc_1minute_data'
 OUTPUT_DIRECTORY_1SEC = 'C:\\Users\\admin\\Desktop\\btc_1second_data'
 TEMP_DIRECTORY = 'C:\\Users\\admin\\Desktop\\temp_extract'
 
-# Examples for different operating systems:
 #
 # Windows:
 # INPUT_DIRECTORY = 'C:\\crypto_data\\btc'

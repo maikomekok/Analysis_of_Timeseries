@@ -671,7 +671,7 @@ def analyze_patterns_for_date(date_str):
 
 if __name__ == "__main__":
     # Analyze for a specific date
-    date_to_analyze = "2025-09-01"
+    date_to_analyze = "2025-08-24"
 
     results = analyze_patterns_for_date(date_to_analyze)
 

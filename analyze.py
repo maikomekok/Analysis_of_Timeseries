@@ -38,7 +38,7 @@ def find_index_from_timestamp(dates, target_timestamp):
                 return pos
 
 
-def find_local_extremes(ohlc_data, window_size=50):
+def find_local_extremes(ohlc_data, window_size=100):
     """Find all local highs and lows in OHLC data, ensuring A is highest high or lowest low"""
     highs = ohlc_data['high']
     lows = ohlc_data['low']
@@ -61,13 +61,217 @@ def find_local_extremes(ohlc_data, window_size=50):
     return extremes
 
 
+def find_patterns_from_progressive_lows(ohlc_data, dates, min_change, retracement_target,
+                                        retracement_tolerance, completion_extension,
+                                        failure_level, min_points_separation, seen_patterns):
+    """
+    Find uptrend patterns where A is a low.
+    A updates dynamically when a new low is found.
+    """
+    patterns = []
+    highs, lows = ohlc_data['high'], ohlc_data['low']
+    direction = 'up'
+
+    # Track the current lowest point as A
+    current_A_idx = 0
+    current_A_price = lows[0]
+
+    # Scan through the data
+    i = 0
+    while i < len(dates):
+        # Check if we have a new low (new A point)
+        if lows[i] < current_A_price:
+            # New absolute low found - this becomes the new A
+            current_A_idx = i
+            current_A_price = lows[i]
+
+            # Reset and start pattern search from this new A
+            # Continue scanning from next point
+            i += 1
+            continue
+
+        # Only look for patterns starting from current A
+        if i >= current_A_idx + min_points_separation:
+            # Find the highest point between A and current position (trailing B)
+            if i > current_A_idx:
+                B_idx = current_A_idx + 1 + np.argmax(highs[current_A_idx + 1:i + 1])
+                B_price = highs[B_idx]
+
+                # Check if AB move is significant
+                move_pct = abs(B_price - current_A_price) / abs(current_A_price)
+                if move_pct >= min_change:
+                    move_AB = abs(B_price - current_A_price)
+
+                    # Look for C retracement at current position
+                    left = max(0, i - min_points_separation)
+                    right = min(len(dates), i + min_points_separation + 1)
+
+                    # Check if current position is a local low (potential C)
+                    if lows[i] == min(lows[left:right]):
+                        C_price = lows[i]
+                        C_idx = i
+                        target_C = B_price - (move_AB * retracement_target)
+                        tolerance = move_AB * retracement_tolerance
+
+                        if abs(C_price - target_C) <= tolerance:
+                            # Valid C found, look for D
+                            D_found = False
+                            D_price, D_idx, pattern_status = None, None, None
+
+                            for k in range(C_idx + min_points_separation, len(dates)):
+                                # Check if price goes below A (invalidates pattern)
+                                if lows[k] < current_A_price:
+                                    # This will become a new A in the next iteration
+                                    break
+
+                                # Check for failure or completion
+                                if lows[k] < B_price - (move_AB * failure_level):
+                                    D_price, D_idx, pattern_status = lows[k], k, "failed"
+                                    D_found = True
+                                    break
+                                elif highs[k] >= B_price + (move_AB * completion_extension):
+                                    D_price, D_idx, pattern_status = highs[k], k, "completed"
+                                    D_found = True
+                                    break
+
+                            if D_found:
+                                # Create unique key for deduplication
+                                pattern_key = (direction, C_idx, D_idx, pattern_status)
+
+                                if pattern_key not in seen_patterns:
+                                    seen_patterns.add(pattern_key)
+
+                                    pattern = {
+                                        "direction": direction,
+                                        "A": (dates[current_A_idx], current_A_price),
+                                        "B": (dates[B_idx], B_price),
+                                        "C": (dates[C_idx], C_price),
+                                        "D": (dates[D_idx], D_price),
+                                        "status": pattern_status,
+                                        "pattern_type": "progressive",
+                                        "retracement_pct": abs(C_price - B_price) / move_AB * 100,
+                                        "initial_move_pct": move_pct * 100,
+                                        "price_types": {
+                                            "A": "low",
+                                            "B": "high",
+                                            "C": "low",
+                                            "D": "low" if pattern_status == "failed" else "high"
+                                        }
+                                    }
+                                    patterns.append(pattern)
+
+        i += 1
+
+    return patterns
+
+
+def find_patterns_from_progressive_highs(ohlc_data, dates, min_change, retracement_target,
+                                         retracement_tolerance, completion_extension,
+                                         failure_level, min_points_separation, seen_patterns):
+    """
+    Find downtrend patterns where A is a high.
+    A updates dynamically when a new high is found.
+    """
+    patterns = []
+    highs, lows = ohlc_data['high'], ohlc_data['low']
+    direction = 'down'
+
+    # Track the current highest point as A
+    current_A_idx = 0
+    current_A_price = highs[0]
+
+    # Scan through the data
+    i = 0
+    while i < len(dates):
+        # Check if we have a new high (new A point)
+        if highs[i] > current_A_price:
+            # New absolute high found - this becomes the new A
+            current_A_idx = i
+            current_A_price = highs[i]
+
+            # Reset and start pattern search from this new A
+            i += 1
+            continue
+
+        # Only look for patterns starting from current A
+        if i >= current_A_idx + min_points_separation:
+            # Find the lowest point between A and current position (trailing B)
+            if i > current_A_idx:
+                B_idx = current_A_idx + 1 + np.argmin(lows[current_A_idx + 1:i + 1])
+                B_price = lows[B_idx]
+
+                # Check if AB move is significant
+                move_pct = abs(current_A_price - B_price) / abs(current_A_price)
+                if move_pct >= min_change:
+                    move_AB = abs(current_A_price - B_price)
+
+                    # Look for C retracement at current position
+                    left = max(0, i - min_points_separation)
+                    right = min(len(dates), i + min_points_separation + 1)
+
+                    # Check if current position is a local high (potential C)
+                    if highs[i] == max(highs[left:right]):
+                        C_price = highs[i]
+                        C_idx = i
+                        target_C = B_price + (move_AB * retracement_target)
+                        tolerance = move_AB * retracement_tolerance
+
+                        if abs(C_price - target_C) <= tolerance:
+                            # Valid C found, look for D
+                            D_found = False
+                            D_price, D_idx, pattern_status = None, None, None
+
+                            for k in range(C_idx + min_points_separation, len(dates)):
+                                # Check if price goes above A (invalidates pattern)
+                                if highs[k] > current_A_price:
+                                    # This will become a new A in the next iteration
+                                    break
+
+                                # Check for failure or completion
+                                if highs[k] > B_price + (move_AB * failure_level):
+                                    D_price, D_idx, pattern_status = highs[k], k, "failed"
+                                    D_found = True
+                                    break
+                                elif lows[k] <= B_price - (move_AB * completion_extension):
+                                    D_price, D_idx, pattern_status = lows[k], k, "completed"
+                                    D_found = True
+                                    break
+
+                            if D_found:
+                                # Create unique key for deduplication
+                                pattern_key = (direction, C_idx, D_idx, pattern_status)
+
+                                if pattern_key not in seen_patterns:
+                                    seen_patterns.add(pattern_key)
+
+                                    pattern = {
+                                        "direction": direction,
+                                        "A": (dates[current_A_idx], current_A_price),
+                                        "B": (dates[B_idx], B_price),
+                                        "C": (dates[C_idx], C_price),
+                                        "D": (dates[D_idx], D_price),
+                                        "status": pattern_status,
+                                        "pattern_type": "progressive",
+                                        "retracement_pct": abs(C_price - B_price) / move_AB * 100,
+                                        "initial_move_pct": move_pct * 100,
+                                        "price_types": {
+                                            "A": "high",
+                                            "B": "low",
+                                            "C": "high",
+                                            "D": "high" if pattern_status == "failed" else "low"
+                                        }
+                                    }
+                                    patterns.append(pattern)
+
+        i += 1
+
+    return patterns
+
+
 def find_all_patterns_ohlc(ohlc_data, dates):
     """
-    Find ALL ABCD patterns (up & down) with fixed A and trailing B.
-    - A is locked as initial swing extreme
-    - B trails to new extremes
-    - Each valid retracement (C) is tested for completion (D)
-    - After completion/failure, keep A, keep trailing B
+    Find ALL ABCD patterns with DYNAMIC A point detection.
+    When price makes a new extreme, that becomes the new A point.
     """
 
     params = load_parameters()
@@ -84,122 +288,73 @@ def find_all_patterns_ohlc(ohlc_data, dates):
     patterns = []
     highs, lows = ohlc_data['high'], ohlc_data['low']
 
-    # Step 1: pick A
+    # Track unique patterns
+    seen_patterns = set()
+
     if use_only_absolute_extremes:
-        potential_A_points = [
-            (lows.index(min(lows)), min(lows), 'low'),   # Uptrend
-            (highs.index(max(highs)), max(highs), 'high')  # Downtrend
-        ]
-    # else:
-    #     potential_A_points = find_local_extremes(ohlc_data)
+        # For uptrend patterns (A is a low)
+        patterns.extend(find_patterns_from_progressive_lows(
+            ohlc_data, dates, min_change, retracement_target,
+            retracement_tolerance, completion_extension, failure_level,
+            min_points_separation, seen_patterns
+        ))
 
-    # Step 2: loop over possible A points
-    for A_idx, A_price, A_type in potential_A_points:
-        direction = 'up' if A_type == 'low' else 'down'
-
-        # Initialize trailing B
-        if direction == 'up':
-            current_B_price = float('-inf')
-            current_B_idx = None
-        else:
-            current_B_price = float('inf')
-            current_B_idx = None
-
-        # Step 3: scan forward from A
-        for i in range(A_idx + min_points_separation, len(dates)):
-
-            # Invalidation: if price crosses beyond A, stop
-            if direction == 'up' and lows[i] < A_price:
-                break
-            if direction == 'down' and highs[i] > A_price:
-                break
-
-            # Update trailing B
-            if direction == 'up' and highs[i] > current_B_price:
-                current_B_price = highs[i]
-                current_B_idx = i
-            elif direction == 'down' and lows[i] < current_B_price:
-                current_B_price = lows[i]
-                current_B_idx = i
-
-            # Skip if no B yet
-            if current_B_idx is None:
-                continue
-
-            # Step 4: check AB move big enough
-            move_pct = abs(current_B_price - A_price) / abs(A_price)
-            if move_pct < min_change:
-                continue
-
-            move_AB = abs(current_B_price - A_price)
-
-            # Step 5: look for valid C (local extreme + ~50% retracement)
-            left = max(0, i - min_points_separation)
-            right = min(len(dates), i + min_points_separation + 1)
-
-            if direction == 'up' and lows[i] == min(lows[left:right]):
-                C_price = lows[i]
-                target_C = current_B_price - (move_AB * retracement_target)
-            elif direction == 'down' and highs[i] == max(highs[left:right]):
-                C_price = highs[i]
-                target_C = current_B_price + (move_AB * retracement_target)
-            else:
-                continue
-
-            tolerance = move_AB * retracement_tolerance
-            if abs(C_price - target_C) > tolerance:
-                continue  # invalid retracement
-
-            # Step 6: search for D (completion or failure)
-            D_found = False
-            D_price, D_idx, pattern_status = None, None, None
-            for k in range(i + min_points_separation, len(dates)):
-                if direction == 'up':
-                    if lows[k] < current_B_price - (move_AB * failure_level):
-                        D_price, D_idx, pattern_status = lows[k], k, "failed"
-                        D_found = True
-                        break
-                    elif highs[k] >= current_B_price + (move_AB * completion_extension):
-                        D_price, D_idx, pattern_status = highs[k], k, "completed"
-                        D_found = True
-                        break
-                else:
-                    if highs[k] > current_B_price + (move_AB * failure_level):
-                        D_price, D_idx, pattern_status = highs[k], k, "failed"
-                        D_found = True
-                        break
-                    elif lows[k] <= current_B_price - (move_AB * completion_extension):
-                        D_price, D_idx, pattern_status = lows[k], k, "completed"
-                        D_found = True
-                        break
-
-            # Step 7: record pattern if D found
-            if D_found:
-                pattern = {
-                    "direction": direction,
-                    "A": (dates[A_idx], A_price),
-                    "B": (dates[current_B_idx], current_B_price),
-                    "C": (dates[i], C_price),
-                    "D": (dates[D_idx], D_price),
-                    "status": pattern_status,
-                    "pattern_type": "progressive",
-                    "price_types": {
-                        "A": A_type,
-                        "B": "high" if direction == "up" else "low",
-                        "C": "low" if direction == "up" else "high",
-                        "D": ("low" if pattern_status == "failed" else "high") if direction == "up"
-                              else ("high" if pattern_status == "failed" else "low")
-                    }
-                }
-                patterns.append(pattern)
-
-                # ✅ Don’t reset A — keep trailing B and continue searching
+        # For downtrend patterns (A is a high)
+        patterns.extend(find_patterns_from_progressive_highs(
+            ohlc_data, dates, min_change, retracement_target,
+            retracement_tolerance, completion_extension, failure_level,
+            min_points_separation, seen_patterns
+        ))
 
     return patterns
 
+
+def deduplicate_patterns(patterns, tolerance_seconds=60):
+    """
+    Additional deduplication function to remove patterns that are nearly identical.
+    Patterns are considered duplicates if they have the same direction, status,
+    and their C and D points are within tolerance_seconds of each other.
+    """
+    if not patterns:
+        return patterns
+
+    unique_patterns = []
+
+    for pattern in patterns:
+        is_duplicate = False
+
+        for unique in unique_patterns:
+            # Check if same direction and status
+            if (pattern['direction'] == unique['direction'] and
+                    pattern['status'] == unique['status']):
+
+                # Get timestamps
+                pattern_c_time = pd.to_datetime(pattern['C'][0])
+                pattern_d_time = pd.to_datetime(pattern['D'][0])
+                unique_c_time = pd.to_datetime(unique['C'][0])
+                unique_d_time = pd.to_datetime(unique['D'][0])
+
+                # Check if C and D points are within tolerance
+                c_diff = abs((pattern_c_time - unique_c_time).total_seconds())
+                d_diff = abs((pattern_d_time - unique_d_time).total_seconds())
+
+                if c_diff <= tolerance_seconds and d_diff <= tolerance_seconds:
+                    # Check price similarity (within 0.1%)
+                    c_price_diff = abs(pattern['C'][1] - unique['C'][1]) / unique['C'][1]
+                    d_price_diff = abs(pattern['D'][1] - unique['D'][1]) / unique['D'][1]
+
+                    if c_price_diff < 0.001 and d_price_diff < 0.001:
+                        is_duplicate = True
+                        break
+
+        if not is_duplicate:
+            unique_patterns.append(pattern)
+
+    return unique_patterns
 def analyze_multiple_windows(prices, dates, ohlc_data=None):
     """
-    Analyze with multiple window sizes using parameters from JSON
+    Analyze with multiple window sizes using parameters from JSON.
+    Now includes deduplication of patterns.
     """
     params = load_parameters()
     pattern_config = params['pattern_detection']
@@ -215,6 +370,9 @@ def analyze_multiple_windows(prices, dates, ohlc_data=None):
 
     all_patterns = []
     window_sizes = sorted(window_sizes)
+
+    # Track all raw patterns before deduplication
+    raw_pattern_count = 0
 
     for window_size in window_sizes:
         if window_size >= len(prices):
@@ -240,6 +398,7 @@ def analyze_multiple_windows(prices, dates, ohlc_data=None):
 
                 # Find patterns in this window
                 window_patterns = find_all_patterns_ohlc(window_ohlc, window_dates)
+                raw_pattern_count += len(window_patterns)
 
                 # If configured, search beyond window for accurate failure points
                 if detect_long_failures and ohlc_data:
@@ -266,6 +425,25 @@ def analyze_multiple_windows(prices, dates, ohlc_data=None):
                     pattern_analysis = analyze_single_pattern(pattern)
                     all_patterns.append((pattern, pattern_analysis, window_info))
 
+    # Deduplicate patterns across all windows
+    if all_patterns:
+        patterns_only = [p[0] for p in all_patterns]
+        unique_patterns = deduplicate_patterns(patterns_only)
+
+        # Rebuild the all_patterns list with only unique patterns
+        unique_all_patterns = []
+        for pattern in unique_patterns:
+            # Find the corresponding analysis and window info
+            for p, analysis, window_info in all_patterns:
+                if (p['C'] == pattern['C'] and p['D'] == pattern['D'] and
+                    p['direction'] == pattern['direction'] and p['status'] == pattern['status']):
+                    unique_all_patterns.append((pattern, analysis, window_info))
+                    break
+
+        all_patterns = unique_all_patterns
+
+        print(f"Deduplication: {raw_pattern_count} raw patterns → {len(all_patterns)} unique patterns")
+
     # Sort by significance using scoring weights from JSON
     all_patterns.sort(key=lambda x: calculate_pattern_score(x[0]), reverse=True)
 
@@ -278,6 +456,78 @@ def analyze_multiple_windows(prices, dates, ohlc_data=None):
     return all_patterns
 
 
+def validate_pattern_integrity(pattern, ohlc_data, dates):
+    """
+    Additional validation to ensure pattern integrity.
+    Checks that price doesn't violate critical levels during pattern formation.
+    """
+    A_time, A_price = pattern['A']
+    B_time, B_price = pattern['B']
+    C_time, C_price = pattern['C']
+    D_time, D_price = pattern['D']
+    direction = pattern['direction']
+
+    # Get indices
+    A_idx = find_index_from_timestamp(dates, A_time)
+    B_idx = find_index_from_timestamp(dates, B_time)
+    C_idx = find_index_from_timestamp(dates, C_time)
+    D_idx = find_index_from_timestamp(dates, D_time)
+
+    highs = ohlc_data['high']
+    lows = ohlc_data['low']
+
+    # Check that price never violates A during the entire pattern
+    for i in range(A_idx + 1, D_idx + 1):
+        if direction == 'up':
+            if lows[i] < A_price:
+                return False, f"Price violated A level at index {i}"
+        else:
+            if highs[i] > A_price:
+                return False, f"Price violated A level at index {i}"
+
+    # Check that C doesn't go beyond B
+    if direction == 'up':
+        if C_price > B_price:
+            return False, "C retracement went above B"
+    else:
+        if C_price < B_price:
+            return False, "C retracement went below B"
+
+    # Check proper sequence
+    if not (A_idx < B_idx < C_idx < D_idx):
+        return False, "Pattern points not in proper chronological order"
+
+    return True, "Pattern valid"
+
+
+def find_patterns_progressive(ohlc_data, dates):
+    """
+    Progressive ABCD pattern finder with dynamic A point updates.
+    """
+    params = load_parameters()
+    pattern_config = params['pattern_detection']
+
+    min_change = params['min_change']
+    retracement_target = pattern_config['retracement_target']
+    retracement_tolerance = pattern_config['retracement_tolerance']
+    completion_extension = pattern_config['completion_extension']
+    failure_level = pattern_config['failure_level']
+    min_points_separation = pattern_config['validation_rules']['min_points_separation']
+    use_only_absolute_extremes = pattern_config.get('use_only_absolute_extremes', True)
+
+    if use_only_absolute_extremes:
+        # Use the new dynamic A detection
+        return find_all_patterns_ohlc(ohlc_data, dates)
+    else:
+        # Use local extremes (your existing code for this case)
+        patterns = []
+        highs, lows = ohlc_data['high'], ohlc_data['low']
+
+        for A_idx, A_price, A_type in find_local_extremes(ohlc_data):
+            # ... existing local extremes code ...
+            pass
+
+        return patterns
 def find_accurate_failure_beyond_window(pattern, full_ohlc_data, full_dates, window_start, window_end):
     """
     For failed patterns, search beyond window boundary for accurate failure point
