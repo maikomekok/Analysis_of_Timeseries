@@ -1,12 +1,12 @@
 {
   "min_change": 0.001,
-  "overlap": 0,
+  "overlap": 20,
   "top_patterns": 50,
   "time_window": 120,
 
   "pattern_detection": {
     "retracement_target": 0.5,
-    "retracement_tolerance": 0.001,
+    "retracement_tolerance": 0.002,
     "completion_extension": 0.236,
     "failure_level": 0.88,
     "min_move_multiplier": 1.0,
