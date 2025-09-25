@@ -38,624 +38,341 @@ def find_index_from_timestamp(dates, target_timestamp):
                 return pos
 
 
-def find_local_extremes(ohlc_data, window_size=100):
-    highs = ohlc_data['high']
-    lows = ohlc_data['low']
+def find_local_extremes(ohlc_data, window_size=2):
+    """
+    CORRECTED VERSION - Properly detect local extremes without missing obvious peaks/troughs
+    """
+    highs = np.array(ohlc_data['high'])
+    lows = np.array(ohlc_data['low'])
     extremes = []
 
-    params = load_parameters()
-    min_points_separation = params['pattern_detection']['validation_rules'].get('min_points_separation', 5)
-    lookback_window = params['pattern_detection']['validation_rules'].get('lookback_window', window_size * 2)
+    for i in range(window_size, len(highs) - window_size):
+        # Local high: higher than ALL points in symmetric window
+        left_highs = highs[i - window_size:i] if i >= window_size else []
+        right_highs = highs[i + 1:i + window_size + 1] if i < len(highs) - window_size else []
 
-    for i in range(lookback_window, len(highs) - window_size):
-        # Check for local high (potential A for downtrend)
-        window_highs = highs[max(0, i - lookback_window):i + window_size + 1]
-        if highs[i] == max(window_highs):
+        if (len(left_highs) == 0 or highs[i] > np.max(left_highs)) and \
+                (len(right_highs) == 0 or highs[i] > np.max(right_highs)):
             extremes.append((i, highs[i], 'high'))
-        # Check for local low (potential A for uptrend)
-        window_lows = lows[max(0, i - lookback_window):i + window_size + 1]
-        if lows[i] == min(window_lows):
+
+        # Local low: lower than ALL points in symmetric window
+        left_lows = lows[i - window_size:i] if i >= window_size else []
+        right_lows = lows[i + 1:i + window_size + 1] if i < len(lows) - window_size else []
+
+        if (len(left_lows) == 0 or lows[i] < np.min(left_lows)) and \
+                (len(right_lows) == 0 or lows[i] < np.min(right_lows)):
             extremes.append((i, lows[i], 'low'))
 
     return extremes
 
 
-def find_patterns_from_progressive_lows(ohlc_data, dates, min_change, retracement_target,
-                                        retracement_tolerance, completion_extension,
-                                        failure_level, min_points_separation, seen_patterns):
-    """
-    Find uptrend patterns where A is a low.
-    A updates dynamically when a new low is found.
-    """
-    patterns = []
-    highs, lows = ohlc_data['high'], ohlc_data['low']
-    direction = 'up'
-
-    # Track the current lowest point as A
-    current_A_idx = 0
-    current_A_price = lows[0]
-
-    # Scan through the data
-    i = 0
-    while i < len(dates):
-        # Check if we have a new low (new A point)
-        if lows[i] < current_A_price:
-            # New absolute low found - this becomes the new A
-            current_A_idx = i
-            current_A_price = lows[i]
-
-            # Reset and start pattern search from this new A
-            # Continue scanning from next point
-            i += 1
-            continue
-
-        # Only look for patterns starting from current A
-        if i >= current_A_idx + min_points_separation:
-            # Find the highest point between A and current position (trailing B)
-            if i > current_A_idx:
-                B_idx = current_A_idx + 1 + np.argmax(highs[current_A_idx + 1:i + 1])
-                B_price = highs[B_idx]
-
-                # Check if AB move is significant
-                move_pct = abs(B_price - current_A_price) / abs(current_A_price)
-                if move_pct >= min_change:
-                    move_AB = abs(B_price - current_A_price)
-
-                    # Look for C retracement at current position
-                    left = max(0, i - min_points_separation)
-                    right = min(len(dates), i + min_points_separation + 1)
-
-                    # Check if current position is a local low (potential C)
-                    if lows[i] == min(lows[left:right]):
-                        C_price = lows[i]
-                        C_idx = i
-                        target_C = B_price - (move_AB * retracement_target)
-                        tolerance = move_AB * retracement_tolerance
-
-                        if abs(C_price - target_C) <= tolerance:
-                            # Valid C found, look for D
-                            D_found = False
-                            D_price, D_idx, pattern_status = None, None, None
-
-                            for k in range(C_idx + min_points_separation, len(dates)):
-                                # Check if price goes below A (invalidates pattern)
-                                if lows[k] < current_A_price:
-                                    # This will become a new A in the next iteration
-                                    break
-
-                                # Check for failure or completion
-                                if lows[k] < B_price - (move_AB * failure_level):
-                                    D_price, D_idx, pattern_status = lows[k], k, "failed"
-                                    D_found = True
-                                    break
-                                elif highs[k] >= B_price + (move_AB * completion_extension):
-                                    D_price, D_idx, pattern_status = highs[k], k, "completed"
-                                    D_found = True
-                                    break
-
-                            if D_found:
-                                # Create unique key for deduplication
-                                pattern_key = (direction, C_idx, D_idx, pattern_status)
-
-                                if pattern_key not in seen_patterns:
-                                    seen_patterns.add(pattern_key)
-
-                                    pattern = {
-                                        "direction": direction,
-                                        "A": (dates[current_A_idx], current_A_price),
-                                        "B": (dates[B_idx], B_price),
-                                        "C": (dates[C_idx], C_price),
-                                        "D": (dates[D_idx], D_price),
-                                        "status": pattern_status,
-                                        "pattern_type": "progressive",
-                                        "retracement_pct": abs(C_price - B_price) / move_AB * 100,
-                                        "initial_move_pct": move_pct * 100,
-                                        "price_types": {
-                                            "A": "low",
-                                            "B": "high",
-                                            "C": "low",
-                                            "D": "low" if pattern_status == "failed" else "high"
-                                        }
-                                    }
-                                    patterns.append(pattern)
-
-        i += 1
-
-    return patterns
-
-
-def find_patterns_from_progressive_highs(ohlc_data, dates, min_change, retracement_target,
-                                         retracement_tolerance, completion_extension,
-                                         failure_level, min_points_separation, seen_patterns):
-    """
-    Find downtrend patterns where A is a high.
-    A updates dynamically when a new high is found.
-    """
-    patterns = []
-    highs, lows = ohlc_data['high'], ohlc_data['low']
-    direction = 'down'
-
-    # Track the current highest point as A
-    current_A_idx = 0
-    current_A_price = highs[0]
-
-    # Scan through the data
-    i = 0
-    while i < len(dates):
-        # Check if we have a new high (new A point)
-        if highs[i] > current_A_price:
-            # New absolute high found - this becomes the new A
-            current_A_idx = i
-            current_A_price = highs[i]
-
-            # Reset and start pattern search from this new A
-            i += 1
-            continue
-
-        # Only look for patterns starting from current A
-        if i >= current_A_idx + min_points_separation:
-            # Find the lowest point between A and current position (trailing B)
-            if i > current_A_idx:
-                B_idx = current_A_idx + 1 + np.argmin(lows[current_A_idx + 1:i + 1])
-                B_price = lows[B_idx]
-
-                # Check if AB move is significant
-                move_pct = abs(current_A_price - B_price) / abs(current_A_price)
-                if move_pct >= min_change:
-                    move_AB = abs(current_A_price - B_price)
-
-                    # Look for C retracement at current position
-                    left = max(0, i - min_points_separation)
-                    right = min(len(dates), i + min_points_separation + 1)
-
-                    # Check if current position is a local high (potential C)
-                    if highs[i] == max(highs[left:right]):
-                        C_price = highs[i]
-                        C_idx = i
-                        target_C = B_price + (move_AB * retracement_target)
-                        tolerance = move_AB * retracement_tolerance
-
-                        if abs(C_price - target_C) <= tolerance:
-                            # Valid C found, look for D
-                            D_found = False
-                            D_price, D_idx, pattern_status = None, None, None
-
-                            for k in range(C_idx + min_points_separation, len(dates)):
-                                # Check if price goes above A (invalidates pattern)
-                                if highs[k] > current_A_price:
-                                    # This will become a new A in the next iteration
-                                    break
-
-                                # Check for failure or completion
-                                if highs[k] > B_price + (move_AB * failure_level):
-                                    D_price, D_idx, pattern_status = highs[k], k, "failed"
-                                    D_found = True
-                                    break
-                                elif lows[k] <= B_price - (move_AB * completion_extension):
-                                    D_price, D_idx, pattern_status = lows[k], k, "completed"
-                                    D_found = True
-                                    break
-
-                            if D_found:
-                                # Create unique key for deduplication
-                                pattern_key = (direction, C_idx, D_idx, pattern_status)
-
-                                if pattern_key not in seen_patterns:
-                                    seen_patterns.add(pattern_key)
-
-                                    pattern = {
-                                        "direction": direction,
-                                        "A": (dates[current_A_idx], current_A_price),
-                                        "B": (dates[B_idx], B_price),
-                                        "C": (dates[C_idx], C_price),
-                                        "D": (dates[D_idx], D_price),
-                                        "status": pattern_status,
-                                        "pattern_type": "progressive",
-                                        "retracement_pct": abs(C_price - B_price) / move_AB * 100,
-                                        "initial_move_pct": move_pct * 100,
-                                        "price_types": {
-                                            "A": "high",
-                                            "B": "low",
-                                            "C": "high",
-                                            "D": "high" if pattern_status == "failed" else "low"
-                                        }
-                                    }
-                                    patterns.append(pattern)
-
-        i += 1
-
-    return patterns
-
-
 def find_all_patterns_ohlc(ohlc_data, dates):
     """
-    Find ALL ABCD patterns with DYNAMIC A point detection.
-    When price makes a new extreme, that becomes the new A point.
+    Find ABCD patterns with your exact logic:
+    A=lowest, B=highest, C=50% retrace, D=-23.6% extension
     """
-
     params = load_parameters()
-    pattern_config = params['pattern_detection']
-
     min_change = params['min_change']
-    retracement_target = pattern_config['retracement_target']
-    retracement_tolerance = pattern_config['retracement_tolerance']
-    completion_extension = pattern_config['completion_extension']
-    failure_level = pattern_config['failure_level']
-    min_points_separation = pattern_config['validation_rules']['min_points_separation']
-    use_only_absolute_extremes = pattern_config.get('use_only_absolute_extremes', True)
+    retracement_target = 0.5  # Exactly 50%
+    retracement_tolerance = params['pattern_detection']['retracement_tolerance']
+    completion_extension = params['pattern_detection']['completion_extension']  # Use configurable value
+    failure_level = params['pattern_detection']['failure_level']
+    min_points_separation = params['pattern_detection']['validation_rules']['min_points_separation']
+    allow_incomplete = params['pattern_detection'].get('allow_incomplete_patterns', True)
 
     patterns = []
-    highs, lows = ohlc_data['high'], ohlc_data['low']
-
-    # Track unique patterns
-    seen_patterns = set()
-
-    if use_only_absolute_extremes:
-        # For uptrend patterns (A is a low)
-        patterns.extend(find_patterns_from_progressive_lows(
-            ohlc_data, dates, min_change, retracement_target,
-            retracement_tolerance, completion_extension, failure_level,
-            min_points_separation, seen_patterns
-        ))
-
-        # For downtrend patterns (A is a high)
-        patterns.extend(find_patterns_from_progressive_highs(
-            ohlc_data, dates, min_change, retracement_target,
-            retracement_tolerance, completion_extension, failure_level,
-            min_points_separation, seen_patterns
-        ))
-
-    return patterns
-
-
-def deduplicate_patterns(patterns, tolerance_seconds=60):
-    """
-    Additional deduplication function to remove patterns that are nearly identical.
-    Patterns are considered duplicates if they have the same direction, status,
-    and their C and D points are within tolerance_seconds of each other.
-    """
-    if not patterns:
-        return patterns
-
-    unique_patterns = []
-
-    for pattern in patterns:
-        is_duplicate = False
-
-        for unique in unique_patterns:
-            # Check if same direction and status
-            if (pattern['direction'] == unique['direction'] and
-                    pattern['status'] == unique['status']):
-
-                # Get timestamps
-                pattern_c_time = pd.to_datetime(pattern['C'][0])
-                pattern_d_time = pd.to_datetime(pattern['D'][0])
-                unique_c_time = pd.to_datetime(unique['C'][0])
-                unique_d_time = pd.to_datetime(unique['D'][0])
-
-                # Check if C and D points are within tolerance
-                c_diff = abs((pattern_c_time - unique_c_time).total_seconds())
-                d_diff = abs((pattern_d_time - unique_d_time).total_seconds())
-
-                if c_diff <= tolerance_seconds and d_diff <= tolerance_seconds:
-                    # Check price similarity (within 0.1%)
-                    c_price_diff = abs(pattern['C'][1] - unique['C'][1]) / unique['C'][1]
-                    d_price_diff = abs(pattern['D'][1] - unique['D'][1]) / unique['D'][1]
-
-                    if c_price_diff < 0.001 and d_price_diff < 0.001:
-                        is_duplicate = True
-                        break
-
-        if not is_duplicate:
-            unique_patterns.append(pattern)
-
-    return unique_patterns
-def analyze_multiple_windows(prices, dates, ohlc_data=None):
-    """
-    Analyze with multiple window sizes using parameters from JSON.
-    Now includes deduplication of patterns.
-    """
-    params = load_parameters()
-    pattern_config = params['pattern_detection']
-
-    # Get all parameters from JSON
-    window_sizes = params['window_sizes']
-    overlap_percent = params['overlap']
-    min_change_threshold = params['min_change']
-
-    # Advanced options
-    advanced = params.get('advanced_options', {})
-    detect_long_failures = pattern_config.get('search_beyond_window_for_failure', True)
-
-    all_patterns = []
-    window_sizes = sorted(window_sizes)
-
-    # Track all raw patterns before deduplication
-    raw_pattern_count = 0
-
-    for window_size in window_sizes:
-        if window_size >= len(prices):
-            print(f"Window size {window_size} is larger than available data. Skipping.")
-            continue
-
-        step_size = max(1, int(window_size * (1 - overlap_percent / 100)))
-
-        for start_idx in range(0, len(prices) - window_size + 1, step_size):
-            end_idx = start_idx + window_size
-
-            # Get window data
-            window_dates = dates[start_idx:end_idx]
-
-            if ohlc_data:
-                # Create OHLC window
-                window_ohlc = {
-                    'open': ohlc_data['open'][start_idx:end_idx],
-                    'high': ohlc_data['high'][start_idx:end_idx],
-                    'low': ohlc_data['low'][start_idx:end_idx],
-                    'close': ohlc_data['close'][start_idx:end_idx]
-                }
-
-                # Find patterns in this window
-                window_patterns = find_all_patterns_ohlc(window_ohlc, window_dates)
-                raw_pattern_count += len(window_patterns)
-
-                # If configured, search beyond window for accurate failure points
-                if detect_long_failures and ohlc_data:
-                    for pattern in window_patterns:
-                        if pattern['status'] == 'failed':
-                            pattern = find_accurate_failure_beyond_window(
-                                pattern, ohlc_data, dates, start_idx, end_idx
-                            )
-            else:
-                # No OHLC data available
-                print("WARNING: No OHLC data available for pattern detection")
-                window_patterns = []
-
-            if window_patterns:
-                window_info = {
-                    "window_size": window_size,
-                    "start_idx": start_idx,
-                    "end_idx": end_idx,
-                    "start_date": dates[start_idx],
-                    "end_date": dates[end_idx - 1]
-                }
-
-                for pattern in window_patterns:
-                    pattern_analysis = analyze_single_pattern(pattern)
-                    all_patterns.append((pattern, pattern_analysis, window_info))
-
-    # Deduplicate patterns across all windows
-    if all_patterns:
-        patterns_only = [p[0] for p in all_patterns]
-        unique_patterns = deduplicate_patterns(patterns_only)
-
-        # Rebuild the all_patterns list with only unique patterns
-        unique_all_patterns = []
-        for pattern in unique_patterns:
-            # Find the corresponding analysis and window info
-            for p, analysis, window_info in all_patterns:
-                if (p['C'] == pattern['C'] and p['D'] == pattern['D'] and
-                    p['direction'] == pattern['direction'] and p['status'] == pattern['status']):
-                    unique_all_patterns.append((pattern, analysis, window_info))
-                    break
-
-        all_patterns = unique_all_patterns
-
-        print(f"Deduplication: {raw_pattern_count} raw patterns → {len(all_patterns)} unique patterns")
-
-    # Sort by significance using scoring weights from JSON
-    all_patterns.sort(key=lambda x: calculate_pattern_score(x[0]), reverse=True)
-
-    # Limit to top patterns if configured
-    top_patterns = params.get('top_patterns', 50)
-    if len(all_patterns) > top_patterns:
-        all_patterns = all_patterns[:top_patterns]
-
-    print(f"Found {len(all_patterns)} definitive patterns")
-    return all_patterns
-
-
-def validate_pattern_integrity(pattern, ohlc_data, dates):
-    """
-    Additional validation to ensure pattern integrity.
-    Checks that price doesn't violate critical levels during pattern formation.
-    """
-    A_time, A_price = pattern['A']
-    B_time, B_price = pattern['B']
-    C_time, C_price = pattern['C']
-    D_time, D_price = pattern['D']
-    direction = pattern['direction']
-
-    # Get indices
-    A_idx = find_index_from_timestamp(dates, A_time)
-    B_idx = find_index_from_timestamp(dates, B_time)
-    C_idx = find_index_from_timestamp(dates, C_time)
-    D_idx = find_index_from_timestamp(dates, D_time)
-
     highs = ohlc_data['high']
     lows = ohlc_data['low']
 
-    # Check that price never violates A during the entire pattern
-    for i in range(A_idx + 1, D_idx + 1):
-        if direction == 'up':
-            if lows[i] < A_price:
-                return False, f"Price violated A level at index {i}"
-        else:
-            if highs[i] > A_price:
-                return False, f"Price violated A level at index {i}"
+    print(f"=== ABCD PATTERN DETECTION (YOUR EXACT LOGIC) ===")
+    print(f"min_change: {min_change * 100:.3f}%")
+    print(f"retracement_target: {retracement_target * 100:.0f}%")
+    print(f"completion_extension: -{completion_extension * 100:.1f}%")
+    print(f"allow_incomplete: {allow_incomplete}")
 
-    # Check that C doesn't go beyond B
-    if direction == 'up':
-        if C_price > B_price:
-            return False, "C retracement went above B"
-    else:
-        if C_price < B_price:
-            return False, "C retracement went below B"
+    # Find all local extremes
+    extremes = find_local_extremes(ohlc_data, window_size=2)
+    print(f"Found {len(extremes)} local extremes")
 
-    # Check proper sequence
-    if not (A_idx < B_idx < C_idx < D_idx):
-        return False, "Pattern points not in proper chronological order"
+    # Look for UPTREND patterns: A(low) -> B(high) -> C(low, 50%) -> D(high, -23.6%)
+    for i, (A_idx, A_price, A_type) in enumerate(extremes):
+        if A_type != 'low':
+            continue
 
-    return True, "Pattern valid"
+        print(f"\n--- Testing A point #{i + 1}: {dates[A_idx]} ${A_price:.2f} (low) ---")
+
+        # Find all potential B points (highs) after A
+        potential_B_points = []
+        for j, (B_idx, B_price, B_type) in enumerate(extremes[i + 1:], i + 1):
+            if B_type == 'high' and B_idx > A_idx + min_points_separation:
+                ab_move = B_price - A_price
+                ab_move_pct = ab_move / A_price
+                if ab_move_pct >= min_change:
+                    potential_B_points.append((j, B_idx, B_price, ab_move, ab_move_pct))
+
+        print(f"  Found {len(potential_B_points)} potential B points after A")
+
+        # Test each B point (starting from highest)
+        potential_B_points.sort(key=lambda x: x[2], reverse=True)  # Sort by price (highest first)
+
+        for b_order, (b_ext_idx, B_idx, B_price, ab_move, ab_move_pct) in enumerate(potential_B_points):
+            print(f"\n  Testing B #{b_order + 1}: {dates[B_idx]} ${B_price:.2f} (AB move: {ab_move_pct * 100:.3f}%)")
+
+            # Calculate 50% retracement level
+            target_C_price = B_price - (ab_move * retracement_target)  # 50% back toward A
+            tolerance = ab_move * retracement_tolerance
+
+            print(f"    Target C level: ${target_C_price:.2f} (±${tolerance:.2f})")
+
+            # Look for C point (low) after B that hits 50% retracement
+            C_found = False
+            for k, (C_idx, C_price, C_type) in enumerate(extremes[b_ext_idx + 1:], b_ext_idx + 1):
+                if C_type == 'low' and C_idx > B_idx + min_points_separation:
+
+                    # Check if C is within tolerance of 50% retracement
+                    if abs(C_price - target_C_price) <= tolerance:
+                        retracement_pct = (B_price - C_price) / ab_move
+
+                        print(
+                            f"    ✓ Valid C found: {dates[C_idx]} ${C_price:.2f} (retrace: {retracement_pct * 100:.1f}%)")
+
+                        # Look for D target (-23.6% extension beyond B)
+                        target_D_price = B_price + (ab_move * completion_extension)
+                        failure_price = B_price - (ab_move * failure_level)
+
+                        print(f"    Searching for D - Target: ${target_D_price:.2f}, Failure: ${failure_price:.2f}")
+
+                        # Search for D in remaining price data
+                        D_found = False
+                        for m in range(C_idx + min_points_separation, len(highs)):
+                            # Check for failure first
+                            if lows[m] <= failure_price:
+                                print(f"    ✗ Pattern FAILED at {dates[m]} ${lows[m]:.2f}")
+                                patterns.append({
+                                    "direction": "up",
+                                    "A": (dates[A_idx], A_price),
+                                    "B": (dates[B_idx], B_price),
+                                    "C": (dates[C_idx], C_price),
+                                    "D": (dates[m], lows[m]),
+                                    "status": "failed",
+                                    "pattern_type": "abcd",
+                                    "retracement_pct": retracement_pct * 100,
+                                    "initial_move_pct": ab_move_pct * 100,
+                                    "price_types": {"A": "low", "B": "high", "C": "low", "D": "low"}
+                                })
+                                D_found = True
+                                break
+
+                            # Check for completion
+                            elif highs[m] >= target_D_price:
+                                print(f"    ✓ Pattern COMPLETED at {dates[m]} ${highs[m]:.2f}")
+                                patterns.append({
+                                    "direction": "up",
+                                    "A": (dates[A_idx], A_price),
+                                    "B": (dates[B_idx], B_price),
+                                    "C": (dates[C_idx], C_price),
+                                    "D": (dates[m], highs[m]),
+                                    "status": "completed",
+                                    "pattern_type": "abcd",
+                                    "retracement_pct": retracement_pct * 100,
+                                    "initial_move_pct": ab_move_pct * 100,
+                                    "price_types": {"A": "low", "B": "high", "C": "low", "D": "high"}
+                                })
+                                D_found = True
+                                break
+
+                        if D_found:
+                            C_found = True
+                            break  # Found valid ABCD pattern with this B
+                        else:
+                            print(f"    ~ Pattern pending (no D completion yet)")
+
+                            # If incomplete patterns are allowed, add as pending
+                            if allow_incomplete:
+                                patterns.append({
+                                    "direction": "down",
+                                    "A": (dates[A_idx], A_price),
+                                    "B": (dates[B_idx], B_price),
+                                    "C": (dates[C_idx], C_price),
+                                    "D": (None, None),  # No D yet
+                                    "status": "pending",
+                                    "pattern_type": "abcd_incomplete",
+                                    "retracement_pct": retracement_pct * 100,
+                                    "initial_move_pct": ab_move_pct * 100,
+                                    "target_D_price": target_D_price,
+                                    "failure_price": failure_price,
+                                    "price_types": {"A": "high", "B": "low", "C": "high", "D": "pending"}
+                                })
+                                print(f"    + Added as PENDING pattern (ABC complete, waiting for D)")
+                                C_found = True
+                                break
+
+                            # If incomplete patterns are allowed, add as pending
+                            if allow_incomplete:
+                                patterns.append({
+                                    "direction": "up",
+                                    "A": (dates[A_idx], A_price),
+                                    "B": (dates[B_idx], B_price),
+                                    "C": (dates[C_idx], C_price),
+                                    "D": (None, None),  # No D yet
+                                    "status": "pending",
+                                    "pattern_type": "abcd_incomplete",
+                                    "retracement_pct": retracement_pct * 100,
+                                    "initial_move_pct": ab_move_pct * 100,
+                                    "target_D_price": target_D_price,
+                                    "failure_price": failure_price,
+                                    "price_types": {"A": "low", "B": "high", "C": "low", "D": "pending"}
+                                })
+                                print(f"    + Added as PENDING pattern (ABC complete, waiting for D)")
+                                C_found = True
+                                break
+
+            if C_found:
+                break  # Found valid C with this B, don't try higher B points
+            else:
+                print(f"    ✗ No valid C found for this B, trying next highest B")
+
+    # Look for DOWNTREND patterns: A(high) -> B(low) -> C(high, 50%) -> D(low, -23.6%)
+    for i, (A_idx, A_price, A_type) in enumerate(extremes):
+        if A_type != 'high':
+            continue
+
+        print(f"\n--- Testing A point #{i + 1}: {dates[A_idx]} ${A_price:.2f} (high) ---")
+
+        # Find all potential B points (lows) after A
+        potential_B_points = []
+        for j, (B_idx, B_price, B_type) in enumerate(extremes[i + 1:], i + 1):
+            if B_type == 'low' and B_idx > A_idx + min_points_separation:
+                ab_move = A_price - B_price
+                ab_move_pct = ab_move / A_price
+                if ab_move_pct >= min_change:
+                    potential_B_points.append((j, B_idx, B_price, ab_move, ab_move_pct))
+
+        print(f"  Found {len(potential_B_points)} potential B points after A")
+
+        # Test each B point (starting from lowest)
+        potential_B_points.sort(key=lambda x: x[2])  # Sort by price (lowest first)
+
+        for b_order, (b_ext_idx, B_idx, B_price, ab_move, ab_move_pct) in enumerate(potential_B_points):
+            print(f"\n  Testing B #{b_order + 1}: {dates[B_idx]} ${B_price:.2f} (AB move: {ab_move_pct * 100:.3f}%)")
+
+            # Calculate 50% retracement level
+            target_C_price = B_price + (ab_move * retracement_target)  # 50% back toward A
+            tolerance = ab_move * retracement_tolerance
+
+            print(f"    Target C level: ${target_C_price:.2f} (±${tolerance:.2f})")
+
+            # Look for C point (high) after B that hits 50% retracement
+            C_found = False
+            for k, (C_idx, C_price, C_type) in enumerate(extremes[b_ext_idx + 1:], b_ext_idx + 1):
+                if C_type == 'high' and C_idx > B_idx + min_points_separation:
+
+                    # Check if C is within tolerance of 50% retracement
+                    if abs(C_price - target_C_price) <= tolerance:
+                        retracement_pct = (C_price - B_price) / ab_move
+
+                        print(
+                            f"    ✓ Valid C found: {dates[C_idx]} ${C_price:.2f} (retrace: {retracement_pct * 100:.1f}%)")
+
+                        # Look for D target (-23.6% extension beyond B)
+                        target_D_price = B_price - (ab_move * completion_extension)
+                        failure_price = B_price + (ab_move * failure_level)
+
+                        print(f"    Searching for D - Target: ${target_D_price:.2f}, Failure: ${failure_price:.2f}")
+
+                        # Search for D in remaining price data
+                        D_found = False
+                        for m in range(C_idx + min_points_separation, len(lows)):
+                            # Check for failure first
+                            if highs[m] >= failure_price:
+                                print(f"    ✗ Pattern FAILED at {dates[m]} ${highs[m]:.2f}")
+                                patterns.append({
+                                    "direction": "down",
+                                    "A": (dates[A_idx], A_price),
+                                    "B": (dates[B_idx], B_price),
+                                    "C": (dates[C_idx], C_price),
+                                    "D": (dates[m], highs[m]),
+                                    "status": "failed",
+                                    "pattern_type": "abcd",
+                                    "retracement_pct": retracement_pct * 100,
+                                    "initial_move_pct": ab_move_pct * 100,
+                                    "price_types": {"A": "high", "B": "low", "C": "high", "D": "high"}
+                                })
+                                D_found = True
+                                break
+
+                            # Check for completion
+                            elif lows[m] <= target_D_price:
+                                print(f"    ✓ Pattern COMPLETED at {dates[m]} ${lows[m]:.2f}")
+                                patterns.append({
+                                    "direction": "down",
+                                    "A": (dates[A_idx], A_price),
+                                    "B": (dates[B_idx], B_price),
+                                    "C": (dates[C_idx], C_price),
+                                    "D": (dates[m], lows[m]),
+                                    "status": "completed",
+                                    "pattern_type": "abcd",
+                                    "retracement_pct": retracement_pct * 100,
+                                    "initial_move_pct": ab_move_pct * 100,
+                                    "price_types": {"A": "high", "B": "low", "C": "high", "D": "low"}
+                                })
+                                D_found = True
+                                break
+
+                        if D_found:
+                            C_found = True
+                            break  # Found valid ABCD pattern with this B
+                        else:
+                            print(f"    ~ Pattern pending (no D completion yet)")
+
+            if C_found:
+                break  # Found valid C with this B, don't try lower B points
+            else:
+                print(f"    ✗ No valid C found for this B, trying next lowest B")
+
+    print(f"\n=== SUMMARY ===")
+    print(f"Total ABCD patterns found: {len(patterns)}")
+    completed = [p for p in patterns if p['status'] == 'completed']
+    failed = [p for p in patterns if p['status'] == 'failed']
+    print(f"  Completed: {len(completed)}")
+    print(f"  Failed: {len(failed)}")
+
+    return patterns
 
 
-def find_patterns_progressive(ohlc_data, dates):
-    """
-    Progressive ABCD pattern finder with dynamic A point updates.
-    """
-    params = load_parameters()
-    pattern_config = params['pattern_detection']
-
-    min_change = params['min_change']
-    retracement_target = pattern_config['retracement_target']
-    retracement_tolerance = pattern_config['retracement_tolerance']
-    completion_extension = pattern_config['completion_extension']
-    failure_level = pattern_config['failure_level']
-    min_points_separation = pattern_config['validation_rules']['min_points_separation']
-    use_only_absolute_extremes = pattern_config.get('use_only_absolute_extremes', True)
-
-    if use_only_absolute_extremes:
-        # Use the new dynamic A detection
-        return find_all_patterns_ohlc(ohlc_data, dates)
-    else:
-        # Use local extremes (your existing code for this case)
-        patterns = []
-        highs, lows = ohlc_data['high'], ohlc_data['low']
-
-        for A_idx, A_price, A_type in find_local_extremes(ohlc_data):
-            # ... existing local extremes code ...
-            pass
-
-        return patterns
-def find_accurate_failure_beyond_window(pattern, full_ohlc_data, full_dates, window_start, window_end):
-    """
-    For failed patterns, search beyond window boundary for accurate failure point
-    """
-    if pattern['status'] != 'failed':
-        return pattern
-
-    params = load_parameters()
-    pattern_config = params['pattern_detection']
-    failure_level = pattern_config['failure_level']
-
-    # Get pattern details
-    C_timestamp = pattern['C'][0]
-    C_idx_in_window = find_index_from_timestamp(full_dates[window_start:window_end], C_timestamp)
-    global_C_idx = window_start + C_idx_in_window
-
-    B_price = pattern['B'][1]
-    A_price = pattern['A'][1]
-    direction = pattern['direction']
-
-    # Calculate failure level
-    move_AB = abs(B_price - A_price)
-    if direction == 'up':
-        failure_level_price = B_price - (move_AB * failure_level)
-    else:
-        failure_level_price = B_price + (move_AB * failure_level)
-
-    # Search beyond window for actual failure
-    highs = full_ohlc_data['high']
-    lows = full_ohlc_data['low']
-
-    for i in range(global_C_idx + 1, len(full_dates)):
-        if direction == 'up' and lows[i] < failure_level_price:
-            pattern['D'] = (full_dates[i], lows[i])
-            pattern['accurate_failure_point'] = True
-            break
-        elif direction == 'down' and highs[i] > failure_level_price:
-            pattern['D'] = (full_dates[i], highs[i])
-            pattern['accurate_failure_point'] = True
-            break
-
-    return pattern
+# Compatibility functions to maintain your existing imports
+def find_correction_patterns(ohlc_data, dates):
+    """Compatibility function"""
+    return find_all_patterns_ohlc(ohlc_data, dates)
 
 
-def calculate_pattern_score(pattern):
-    """Calculate pattern score using weights from JSON"""
-    params = load_parameters()
-    weights = params['pattern_detection']['scoring_weights']
-    priority = params['pattern_detection']['pattern_priority']
-
-    score = 0
-
-    # Initial move score
-    initial_move = pattern.get('initial_move_pct', 0)
-    score += initial_move * weights['initial_move']
-
-    # Retracement quality (closer to 50% is better)
-    retracement = pattern.get('retracement_pct', 0)
-    retracement_quality = 1.0 - abs(retracement - 50) / 50
-    score += retracement_quality * weights['retracement_quality']
-
-    # Status priority
-    status = pattern.get('status', 'unknown')
-    score += priority.get(status, 0)
-
-    # Absolute extreme bonus
-    if pattern.get('price_types', {}).get('A') in ['low', 'high']:
-        if pattern['A'][1] == min(pattern['A'][1], pattern['B'][1], pattern['C'][1], pattern['D'][1]):
-            score += weights.get('absolute_extreme_bonus', 0)
-        elif pattern['A'][1] == max(pattern['A'][1], pattern['B'][1], pattern['C'][1], pattern['D'][1]):
-            score += weights.get('absolute_extreme_bonus', 0)
-
-    # Accurate failure bonus
-    if pattern.get('accurate_failure_point', False):
-        score += weights.get('accurate_failure_bonus', 0)
-
-    return score
+def find_patterns_from_local_extremes(ohlc_data, dates):
+    """Compatibility function"""
+    return find_all_patterns_ohlc(ohlc_data, dates)
 
 
-def analyze_single_pattern(pattern):
-    """Analyze a single pattern"""
-    direction = pattern["direction"]
-    retracement_pct = pattern.get("retracement_pct", 0)
-    initial_move_pct = pattern.get("initial_move_pct", 0)
-    status = pattern.get("status", "unknown")
-    price_types = pattern.get("price_types", {})
-
-    D_price = pattern["D"][1]
-
-    if status == "failed":
-        analysis = f"FAILED {direction}trend pattern - Price broke {retracement_pct:.1f}% level"
-        analysis += f"\nInitial Move: {initial_move_pct:.1f}%"
-        analysis += f"\nPattern failed at D (${D_price:.2f})"
-    elif status == "completed":
-        analysis = f"COMPLETED {direction}trend pattern - Target reached"
-        analysis += f"\nInitial Move: {initial_move_pct:.1f}%"
-        analysis += f"\nPattern completed at D (${D_price:.2f})"
-    else:
-        analysis = f"Pattern status: {status}"
-
-    if price_types:
-        analysis += f"\nOHLC used: A={price_types['A']}, B={price_types.get('B', 'N/A')}, "
-        analysis += f"C={price_types.get('C', 'N/A')}, D={price_types.get('D', 'N/A')}"
-
-    return analysis
+def analyze_multiple_windows(prices, dates, ohlc_data=None):
+    """Simplified version for compatibility"""
+    if ohlc_data:
+        patterns = find_all_patterns_ohlc(ohlc_data, dates)
+        return [(p, "", {}) for p in patterns]  # Return in expected format
+    return []
 
 
 def load_and_prepare_data(csv_file, date_range=None, index_range=None):
-    """
-    Load and prepare OHLC data from CSV file
-    """
-    params = load_parameters()
-    data_processing = params.get('data_processing', {})
-
+    """Load and prepare OHLC data from CSV file"""
     df = pd.read_csv(csv_file)
 
-    # Detect timestamp column
     if 'timestamp' in df.columns:
         timestamp_col = 'timestamp'
     else:
         timestamp_col = df.columns[0]
 
-    # Parse timestamps
     try:
         df['timestamp'] = pd.to_datetime(df[timestamp_col], format='mixed')
     except:
         df['timestamp'] = pd.to_datetime(df[timestamp_col])
 
-    # Filter by date range if provided
     if date_range:
         start_date, end_date = date_range
         subset = df[(df['timestamp'] >= start_date) & (df['timestamp'] <= end_date)]
@@ -665,27 +382,10 @@ def load_and_prepare_data(csv_file, date_range=None, index_range=None):
     else:
         subset = df
 
-    # Handle gaps if configured
-    if data_processing.get('handle_gaps', True):
-        subset = subset.sort_values('timestamp')
-        if data_processing.get('interpolate_missing', False):
-            subset = subset.interpolate(method='linear')
+    subset = subset.sort_values('timestamp')
 
-    # Check for OHLC columns
     if all(col in subset.columns for col in ['open', 'high', 'low', 'close']):
         clean_subset = subset.dropna(subset=['open', 'high', 'low', 'close'])
-
-        # Remove outliers if configured
-        if data_processing.get('outlier_removal', False):
-            threshold = data_processing.get('outlier_threshold', 3.0)
-            for col in ['open', 'high', 'low', 'close']:
-                z_scores = np.abs((clean_subset[col] - clean_subset[col].mean()) / clean_subset[col].std())
-                clean_subset = clean_subset[z_scores < threshold]
-
-        # Check minimum data points
-        min_points = data_processing.get('min_data_points', 50)
-        if len(clean_subset) < min_points:
-            print(f"WARNING: Only {len(clean_subset)} data points (minimum: {min_points})")
 
         ohlc_data = {
             'open': clean_subset['open'].tolist(),
@@ -702,78 +402,31 @@ def load_and_prepare_data(csv_file, date_range=None, index_range=None):
         print("ERROR: OHLC columns not found in data")
         return None, None, df, None
 
+
 def find_patterns_progressive(ohlc_data, dates):
-    """
-    Progressive ABCD pattern finder:
-    Start from A, search for B (up/down), if AB >= min_change, check for C.
-    If C invalid, expand horizon and retry.
-    """
-    params = load_parameters()
-    min_change = params['min_change']
-    retracement_target = params['pattern_detection']['retracement_target']
-    retracement_tolerance = params['pattern_detection']['retracement_tolerance']
-    completion_extension = params['pattern_detection']['completion_extension']
-    failure_level = params['pattern_detection']['failure_level']
+    """Compatibility function"""
+    return find_all_patterns_ohlc(ohlc_data, dates)
 
-    patterns = []
-    highs, lows = ohlc_data['high'], ohlc_data['low']
 
-    for A_idx, A_price, A_type in find_local_extremes(ohlc_data):
-        direction = 'up' if A_type == 'low' else 'down'
-        best_B_idx = None
-        best_B_price = None
+def test_your_specific_pattern(csv_file):
+    """Test function to verify pattern detection works"""
+    print("=== TESTING PATTERN DETECTION ===")
 
-        search_idx = A_idx + 1
-        while search_idx < len(dates):
-            # candidate B is best extreme so far
-            if direction == 'up':
-                candidate_B_idx = np.argmax(highs[A_idx:search_idx+1]) + A_idx
-                candidate_B_price = highs[candidate_B_idx]
-            else:
-                candidate_B_idx = np.argmin(lows[A_idx:search_idx+1]) + A_idx
-                candidate_B_price = lows[candidate_B_idx]
+    prices, dates, df, ohlc_data = load_and_prepare_data(csv_file)
 
-            # check AB move
-            move_pct = abs(candidate_B_price - A_price) / abs(A_price)
-            if move_pct >= min_change:
-                # look for C retracement
-                for C_idx in range(candidate_B_idx+1, search_idx+1):
-                    if direction == 'up':
-                        C_price = lows[C_idx]
-                        target_C = candidate_B_price - (abs(candidate_B_price - A_price) * retracement_target)
-                    else:
-                        C_price = highs[C_idx]
-                        target_C = candidate_B_price + (abs(candidate_B_price - A_price) * retracement_target)
+    if ohlc_data is None:
+        print("ERROR: Could not load data")
+        return []
 
-                    tolerance = abs(candidate_B_price - A_price) * retracement_tolerance
-                    if abs(C_price - target_C) <= tolerance:
-                        # we have A, B, C → now D
-                        D_idx, D_price, status = None, None, None
-                        for k in range(C_idx+1, len(dates)):
-                            if direction == 'up':
-                                if lows[k] < candidate_B_price - (abs(candidate_B_price - A_price) * failure_level):
-                                    D_idx, D_price, status = k, lows[k], "failed"
-                                    break
-                                elif highs[k] >= candidate_B_price + (abs(candidate_B_price - A_price) * completion_extension):
-                                    D_idx, D_price, status = k, highs[k], "completed"
-                                    break
-                            else:
-                                if highs[k] > candidate_B_price + (abs(candidate_B_price - A_price) * failure_level):
-                                    D_idx, D_price, status = k, highs[k], "failed"
-                                    break
-                                elif lows[k] <= candidate_B_price - (abs(candidate_B_price - A_price) * completion_extension):
-                                    D_idx, D_price, status = k, lows[k], "completed"
-                                    break
+    print(f"Data loaded: {len(prices)} points")
 
-                        if D_idx:
-                            patterns.append({
-                                "A": (dates[A_idx], A_price),
-                                "B": (dates[candidate_B_idx], candidate_B_price),
-                                "C": (dates[C_idx], C_price),
-                                "D": (dates[D_idx], D_price),
-                                "direction": direction,
-                                "status": status
-                            })
-                            break  # stop after finding valid C/D
-            search_idx += 1
+    # Test extremes detection
+    extremes = find_local_extremes(ohlc_data, window_size=2)
+    print(f"Extremes found: {len(extremes)}")
+
+    # Test pattern detection
+    patterns = find_all_patterns_ohlc(ohlc_data, dates)
+
     return patterns
+
+

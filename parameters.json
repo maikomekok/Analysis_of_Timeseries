@@ -1,63 +1,36 @@
 {
   "min_change": 0.001,
-  "overlap": 20,
+  "window_sizes": [30, 60, 90],
+  "overlap": 50,
   "top_patterns": 50,
-  "time_window": 120,
 
   "pattern_detection": {
     "retracement_target": 0.5,
-    "retracement_tolerance": 0.002,
+    "retracement_tolerance": 0.003,
     "completion_extension": 0.236,
     "failure_level": 0.88,
-    "min_move_multiplier": 1.0,
+    "use_only_absolute_extremes": false,
+    "use_progressive_search": false,
+    "detect_correction_patterns": true,
+    "search_beyond_window_for_failure": true,
 
-"use_only_absolute_extremes": true,
-    "trailing_B_after_A": true,
-    "allow_multiple_patterns": true,
-
-    "significant_patterns_only": ["completed", "failed"],
-
-    "pattern_priority": {
-      "completed": 5,
-      "failed": 3,
-      "in_progress": 0
+    "validation_rules": {
+      "min_points_separation": 2,
+      "lookback_window": 3
     },
 
     "scoring_weights": {
-      "initial_move": 1.0,
-      "retracement_quality": 2.0,
-      "absolute_extreme_bonus": 3.0,
-      "global_extreme_bonus": 2.0,
-      "overlap_bonus": 1.5,
-      "accurate_failure_bonus": 1.0
+      "initial_move": 2.0,
+      "retracement_quality": 1.5,
+      "absolute_extreme_bonus": 1.0,
+      "accurate_failure_bonus": 0.5
     },
 
-    "validation_rules": {
-      "min_points_separation": 5,
-      "max_retracement_deviation": 0.02,
-      "require_definitive_status": true,
-      "validate_D_position": true
+    "pattern_priority": {
+      "completed": 3,
+      "failed": 2,
+      "pending": 1
     }
-  },
-
-  "advanced_options": {
-    "adaptive_lookback": false,
-    "atr_period": 14,
-    "volume_confirmation": false,
-    "trend_alignment": true,
-    "multi_timeframe_confirmation": false,
-    "use_comprehensive_detection": false
-  },
-
-  "output_settings": {
-    "save_plots": true,
-    "plot_dpi": 300,
-    "show_fibonacci_levels": true,
-    "show_all_patterns": false,
-    "highlight_failed_patterns": true,
-    "highlight_global_extremes": true,
-    "include_pattern_statistics": true,
-    "mark_accurate_failure_points": true
   },
 
   "data_processing": {
@@ -68,11 +41,15 @@
     "min_data_points": 50
   },
 
-  "display_options": {
-    "show_A_as_global": true,
-    "show_B_as_global": true,
-    "use_special_markers": true,
-    "label_key_points": true,
-    "color_scheme": "status_based"
+  "output_settings": {
+    "show_plots": true,
+    "save_results": false,
+    "verbose_logging": true
+  },
+
+  "advanced_options": {
+    "enable_debugging": true,
+    "pattern_validation": true,
+    "deduplication_tolerance": 200
   }
 }

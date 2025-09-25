@@ -15,8 +15,6 @@ def calculate_mid_price(df):
         row_mid_prices = []
 
         for i in range(1, 21):
-            # Note: In your data format, bid_prc contains ask prices and ask_prc contains bid prices
-            # So we swap them here for correct calculation
             actual_bid_col = f'ask_prc{i}'  # Actual bid price is in ask column
             actual_ask_col = f'bid_prc{i}'  # Actual ask price is in bid column
 
@@ -69,7 +67,6 @@ def extract_date_from_filename(filename):
 
 
 def extract_tarfile(tar_file_path, extract_dir):
-    """Extract tar.gz file to directory"""
     try:
         if not os.path.exists(extract_dir):
             os.makedirs(extract_dir)

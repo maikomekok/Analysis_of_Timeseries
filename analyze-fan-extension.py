@@ -8,7 +8,9 @@ import os
 from analyze import (
     load_and_prepare_data,
     analyze_multiple_windows,
-    find_patterns_progressive
+    find_patterns_progressive,
+    find_all_patterns_ohlc,
+    test_your_specific_pattern
 )
 import matplotlib.patheffects as pe
 from matplotlib.patches import Rectangle
@@ -43,6 +45,156 @@ def find_index_from_timestamp(dates, target_timestamp):
                 return pos - 1
             else:
                 return pos
+
+
+def plot_completed_abcd_pattern(pattern, ohlc_data, dates, pattern_index=1):
+    """
+    Plot completed ABCD patterns with proper visualization
+    """
+    print(f"\n=== PLOTTING COMPLETED ABCD PATTERN {pattern_index} ===")
+
+    fig, ax = plt.subplots(figsize=(20, 12))
+
+    # Get pattern points
+    A_timestamp, A_price = pattern['A']
+    B_timestamp, B_price = pattern['B']
+    C_timestamp, C_price = pattern['C']
+    D_timestamp, D_price = pattern['D']
+
+    # Find indices
+    pattern_indices = []
+    for point_time in [A_timestamp, B_timestamp, C_timestamp, D_timestamp]:
+        idx = find_index_from_timestamp(dates, point_time)
+        pattern_indices.append(idx)
+
+    # Determine display range with padding
+    min_idx = max(0, min(pattern_indices) - 20)
+    max_idx = min(len(dates) - 1, max(pattern_indices) + 20)
+
+    # Plot candlesticks
+    for i in range(min_idx, max_idx + 1):
+        date = dates[i]
+        open_price = ohlc_data['open'][i]
+        high_price = ohlc_data['high'][i]
+        low_price = ohlc_data['low'][i]
+        close_price = ohlc_data['close'][i]
+
+        color = '#00AA00' if close_price >= open_price else '#AA0000'
+
+        # High-low line
+        ax.plot([date, date], [low_price, high_price],
+                color='black', linewidth=0.8, alpha=0.7, zorder=1)
+
+        # Body rectangle
+        body_height = abs(close_price - open_price)
+        body_bottom = min(open_price, close_price)
+
+        if i < len(dates) - 1:
+            try:
+                width = (mdates.date2num(pd.to_datetime(dates[i + 1])) -
+                         mdates.date2num(pd.to_datetime(date))) * 0.6
+            except:
+                width = 0.0005
+        else:
+            width = 0.0005
+
+        try:
+            date_num = mdates.date2num(pd.to_datetime(date))
+            rect = Rectangle((date_num - width / 2, body_bottom),
+                             width, body_height,
+                             facecolor=color, edgecolor='black',
+                             alpha=0.8, linewidth=0.5, zorder=2)
+            ax.add_patch(rect)
+        except:
+            # Fallback for timestamp issues
+            ax.plot(date, close_price, 'o', color=color, markersize=2, zorder=2)
+
+    # Plot ABCD pattern points
+    point_colors = {
+        'A': '#FF6B6B',  # Red
+        'B': '#4ECDC4',  # Teal
+        'C': '#45B7D1',  # Blue
+        'D': '#96CEB4'  # Green
+    }
+
+    pattern_points = [
+        ('A', A_timestamp, A_price),
+        ('B', B_timestamp, B_price),
+        ('C', C_timestamp, C_price),
+        ('D', D_timestamp, D_price)
+    ]
+
+    # Plot points and labels
+    for point_name, timestamp, price in pattern_points:
+        color = point_colors[point_name]
+
+        # Plot point with white border
+        ax.plot(timestamp, price, 'o',
+                color=color, markersize=16,
+                markeredgecolor='white', markeredgewidth=3, zorder=10)
+
+        # Add label
+        ax.text(timestamp, price, point_name,
+                ha='center', va='center',
+                fontsize=12, fontweight='bold', color='white', zorder=11)
+
+    # Draw connecting lines
+    for i in range(len(pattern_points) - 1):
+        p1_name, p1_time, p1_price = pattern_points[i]
+        p2_name, p2_time, p2_price = pattern_points[i + 1]
+
+        ax.plot([p1_time, p2_time], [p1_price, p2_price],
+                'b-', linewidth=2, alpha=0.7, zorder=5)
+
+    # Add pattern information
+    direction = pattern.get('direction', 'unknown')
+    status = pattern.get('status', 'unknown')
+    pattern_type = pattern.get('pattern_type', 'abcd')
+
+    title = f"COMPLETED {direction.upper()} ABCD Pattern ({pattern_type})"
+    ax.set_title(title, fontsize=16, fontweight='bold', color='green')
+
+    # Add statistics text box
+    stats_text = f"""Pattern Statistics:
+Direction: {direction}
+Status: {status}
+Type: {pattern_type}
+
+A: {A_timestamp} ${A_price:.2f}
+B: {B_timestamp} ${B_price:.2f}  
+C: {C_timestamp} ${C_price:.2f}
+D: {D_timestamp} ${D_price:.2f}
+
+AB Move: {pattern.get('ab_move_pct', 0):.3f}%"""
+
+    if 'retracement_pct' in pattern:
+        stats_text += f"\nBC Retracement: {pattern['retracement_pct']:.1f}%"
+    if 'cd_move_pct' in pattern:
+        stats_text += f"\nCD Move: {pattern['cd_move_pct']:.3f}%"
+
+    # Position text box
+    ax.text(0.02, 0.98, stats_text,
+            transform=ax.transAxes, fontsize=10,
+            verticalalignment='top', horizontalalignment='left',
+            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+
+    # Format axes
+    try:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        fig.autofmt_xdate()
+    except:
+        # Fallback for timestamp formatting issues
+        ax.tick_params(axis='x', rotation=45)
+
+    ax.set_xlabel('Time', fontsize=12)
+    ax.set_ylabel('Price ($)', fontsize=12)
+    ax.grid(True, alpha=0.3, linestyle=':')
+
+    plt.tight_layout()
+    plt.show()
+
+    return fig
 
 
 def calculate_fibonacci_levels(pattern):
@@ -184,7 +336,7 @@ def check_pattern_completion(ohlc_data, dates, s_bounce_idx, e_price, f_price, d
                     'price': lows[i],
                     'target_level': target_level,
                     'failure_level': failure_level_price,
-                    's_failure_point': (dates[i], failure_level_price)  # S point at failure level
+                    's_failure_point': (dates[i], failure_level_price)
                 }
             if highs[i] >= target_level:
                 return {
@@ -202,7 +354,7 @@ def check_pattern_completion(ohlc_data, dates, s_bounce_idx, e_price, f_price, d
                     'price': highs[i],
                     'target_level': target_level,
                     'failure_level': failure_level_price,
-                    's_failure_point': (dates[i], failure_level_price)  # S point at failure level
+                    's_failure_point': (dates[i], failure_level_price)
                 }
             if lows[i] <= target_level:
                 return {
@@ -257,7 +409,7 @@ def find_fan_extension_pattern(pattern, ohlc_data, dates):
         if s_bounce:
             print(f"    ✓ S bounce found at {s_bounce['timestamp']}, ${s_bounce['price']:.2f}")
 
-            # NOW find the actual extreme between D and S
+            # Find the actual extreme between D and S
             s_index = s_bounce['index']
 
             if direction == 'up':
@@ -273,7 +425,7 @@ def find_fan_extension_pattern(pattern, ohlc_data, dates):
 
             actual_e_timestamp = dates[actual_e_idx]
 
-            print(f"    📍 Actual E point (absolute extreme): {actual_e_timestamp}, ${actual_e_price:.2f}")
+            print(f"    🎯 Actual E point (absolute extreme): {actual_e_timestamp}, ${actual_e_price:.2f}")
 
             # Re-calculate S level based on actual E
             if direction == 'up':
@@ -305,7 +457,7 @@ def find_fan_extension_pattern(pattern, ohlc_data, dates):
                 'fibonacci_levels': fib_levels,
                 'f_level': f_price,
                 'e_point': (actual_e_timestamp, actual_e_price),
-                'e_candidate': (e_candidate_timestamp, e_candidate_price),  # Keep track of original candidate
+                'e_candidate': (e_candidate_timestamp, e_candidate_price),
                 's_bounce': s_bounce,
                 'completion': completion,
                 'direction': direction,
@@ -370,15 +522,24 @@ def plot_fan_extension_pattern(analysis, ohlc_data, dates):
         body_bottom = min(open_price, close_price)
 
         if i < len(dates) - 1:
-            width = (mdates.date2num(dates[i + 1]) - mdates.date2num(date)) * 0.7
+            try:
+                width = (mdates.date2num(pd.to_datetime(dates[i + 1])) -
+                         mdates.date2num(pd.to_datetime(date))) * 0.7
+            except:
+                width = 0.0005
         else:
             width = 0.0005
 
-        rect = Rectangle((mdates.date2num(date) - width / 2, body_bottom),
-                         width, body_height,
-                         facecolor=color, edgecolor='black',
-                         alpha=0.7, linewidth=0.3, zorder=2)
-        ax.add_patch(rect)
+        try:
+            date_num = mdates.date2num(pd.to_datetime(date))
+            rect = Rectangle((date_num - width / 2, body_bottom),
+                             width, body_height,
+                             facecolor=color, edgecolor='black',
+                             alpha=0.7, linewidth=0.3, zorder=2)
+            ax.add_patch(rect)
+        except:
+            # Fallback for timestamp issues
+            ax.plot(date, close_price, 'o', color=color, markersize=2, zorder=2)
 
     # Plot ABCD pattern points with consistent style
     point_style = {
@@ -520,9 +681,12 @@ def plot_fan_extension_pattern(analysis, ohlc_data, dates):
         ax.plot([t1, t2], [p1, p2], 'gray', linewidth=1.5, alpha=0.5)
 
     # Format axes
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate()
+    try:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        fig.autofmt_xdate()
+    except:
+        ax.tick_params(axis='x', rotation=45)
 
     ax.set_xlabel('Time', fontsize=12)
     ax.set_ylabel('Price ($)', fontsize=12)
@@ -556,11 +720,11 @@ def plot_fan_extension_pattern(analysis, ohlc_data, dates):
 
 
 def analyze_patterns_for_date(date_str):
-    """Main function to analyze patterns for a given date"""
+    """Main function to analyze patterns for a given date - UPDATED for new pattern detection"""
     params = load_parameters()
 
     print(f"\n{'=' * 70}")
-    print(f"FAN EXTENSION PATTERN ANALYSIS")
+    print(f"PATTERN ANALYSIS WITH ABCD PLOTTING")
     print(f"Date: {date_str}")
     print(f"{'=' * 70}")
 
@@ -568,7 +732,7 @@ def analyze_patterns_for_date(date_str):
     possible_files = [
         f"btc_1minute_data_{date_str}.csv",
         f"./btc_1minute_data_{date_str}.csv",
-        f"C:/Users/admin/Desktop/btc_1minute_data/btc_1minute_data_1minute_{date_str}.csv"
+        f"btc_1minute_data_1minute_{date_str}.csv"
     ]
 
     data_file = None
@@ -591,22 +755,35 @@ def analyze_patterns_for_date(date_str):
 
     print(f"Loaded {len(prices)} data points")
 
-    # Find base ABCD patterns
-    use_progressive = params["pattern_detection"].get("use_progressive_search", True)
+    # Find base ABCD patterns using the NEW detection method
+    print("\n=== FINDING ABCD PATTERNS ===")
+    patterns = find_all_patterns_ohlc(ohlc_data, dates)
+    print(f"Found {len(patterns)} total patterns")
 
-    if use_progressive:
-        patterns = find_patterns_progressive(ohlc_data, dates)
-        print(f"Found {len(patterns)} patterns using progressive search")
-    else:
-        all_patterns = analyze_multiple_windows(prices, dates, ohlc_data)
-        patterns = [p[0] for p in all_patterns]
-        print(f"Found {len(patterns)} patterns using window search")
-
-    # Filter for completed patterns
+    # Separate completed patterns for plotting
     completed_patterns = [p for p in patterns if p.get('status') == 'completed']
-    print(f"Completed ABCD patterns: {len(completed_patterns)}")
+    failed_patterns = [p for p in patterns if p.get('status') == 'failed']
 
-    # Analyze fan extensions
+    print(f"Completed ABCD patterns: {len(completed_patterns)}")
+    print(f"Failed ABCD patterns: {len(failed_patterns)}")
+
+    # Plot all completed ABCD patterns first
+    if completed_patterns:
+        print(f"\n=== PLOTTING {len(completed_patterns)} COMPLETED ABCD PATTERNS ===")
+        for i, pattern in enumerate(completed_patterns):
+            print(f"\nPlotting completed ABCD pattern {i + 1}/{len(completed_patterns)}")
+            plot_completed_abcd_pattern(pattern, ohlc_data, dates, i + 1)
+
+    # Plot failed patterns too if requested
+    show_failed = params.get('output_settings', {}).get('show_failed_patterns', False)
+    if show_failed and failed_patterns:
+        print(f"\n=== PLOTTING {len(failed_patterns)} FAILED ABCD PATTERNS ===")
+        for i, pattern in enumerate(failed_patterns):
+            print(f"\nPlotting failed ABCD pattern {i + 1}/{len(failed_patterns)}")
+            plot_completed_abcd_pattern(pattern, ohlc_data, dates, i + 1)
+
+    # Now analyze fan extensions on completed patterns
+    print(f"\n=== ANALYZING FAN EXTENSIONS ===")
     fan_extensions = []
     successful_count = 0
     failed_count = 0
@@ -614,7 +791,7 @@ def analyze_patterns_for_date(date_str):
 
     for i, pattern in enumerate(completed_patterns):
         print(f"\n{'=' * 50}")
-        print(f"PATTERN {i + 1}/{len(completed_patterns)}")
+        print(f"FAN EXTENSION ANALYSIS {i + 1}/{len(completed_patterns)}")
 
         result = find_fan_extension_pattern(pattern, ohlc_data, dates)
 
@@ -639,6 +816,7 @@ def analyze_patterns_for_date(date_str):
     print(f"{'=' * 70}")
     print(f"Total ABCD patterns: {len(patterns)}")
     print(f"Completed ABCD: {len(completed_patterns)}")
+    print(f"Failed ABCD: {len(failed_patterns)}")
     print(f"Valid fan extensions: {len(fan_extensions)}")
     print(f"  - Completed: {successful_count}")
     print(f"  - Failed: {failed_count}")
@@ -646,21 +824,25 @@ def analyze_patterns_for_date(date_str):
 
     if len(fan_extensions) > 0:
         success_rate = (successful_count / len(fan_extensions)) * 100
-        print(f"Success rate: {success_rate:.1f}%")
+        print(f"Fan extension success rate: {success_rate:.1f}%")
 
-    # Plot results
+    # Plot fan extension results
     if params.get('output_settings', {}).get('show_plots', True):
-        for extension in fan_extensions:
+        print(f"\n=== PLOTTING FAN EXTENSION RESULTS ===")
+        for i, extension in enumerate(fan_extensions):
+            print(f"Plotting fan extension {i + 1}/{len(fan_extensions)}")
             plot_fan_extension_pattern(extension, ohlc_data, dates)
 
     return {
         'date': date_str,
         'patterns': patterns,
         'completed_patterns': completed_patterns,
+        'failed_patterns': failed_patterns,
         'fan_extensions': fan_extensions,
         'stats': {
             'total_patterns': len(patterns),
             'completed_abcd': len(completed_patterns),
+            'failed_abcd': len(failed_patterns),
             'valid_extensions': len(fan_extensions),
             'successful': successful_count,
             'failed': failed_count,
@@ -669,13 +851,58 @@ def analyze_patterns_for_date(date_str):
     }
 
 
+def test_with_your_data(date_str="2025-09-01"):
+    """
+    Test function specifically for your Bitcoin data
+    """
+    print("=== TESTING PATTERN DETECTION WITH PLOTTING ===")
+
+    # First, test basic pattern detection
+    csv_file = f"btc_1minute_data_1minute_{date_str}.csv"
+
+    try:
+        # Test the basic pattern detection first
+        from analyze import test_your_specific_pattern
+        basic_patterns = test_your_specific_pattern(csv_file)
+
+        if basic_patterns and len(basic_patterns) > 0:
+            print(f"✓ Basic pattern detection working: {len(basic_patterns)} patterns found")
+
+            # Now run the full analysis with plotting
+            results = analyze_patterns_for_date(date_str)
+
+            if results:
+                print(f"✓ Full analysis complete with plotting enabled")
+                return results
+            else:
+                print("✗ Full analysis failed")
+                return None
+        else:
+            print("✗ Basic pattern detection failed - check your analyze.py and parameters.json")
+            return None
+
+    except FileNotFoundError:
+        print(f"ERROR: Could not find file '{csv_file}'")
+        print("Available files:", [f for f in os.listdir('.') if f.endswith('.csv')])
+        return None
+    except Exception as e:
+        print(f"ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 if __name__ == "__main__":
+    # Test with your data
     date_to_analyze = "2025-09-01"
 
-    results = analyze_patterns_for_date(date_to_analyze)
+    print("Starting comprehensive pattern analysis with plotting...")
+    results = test_with_your_data(date_to_analyze)
 
     if results:
         print(f"\n✓ Analysis complete!")
-        print(f"Found {results['stats']['valid_extensions']} valid fan extension patterns")
+        print(f"Found {results['stats']['total_patterns']} total patterns")
+        print(f"Plotted {results['stats']['completed_abcd']} completed ABCD patterns")
+        print(f"Found {results['stats']['valid_extensions']} fan extension patterns")
     else:
-        print(f"\n✗ Analysis failed")
+        print(f"\n✗ Analysis failed - check your data file and configuration")
